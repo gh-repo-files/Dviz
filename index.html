@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Датчик движения</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 16px; }
+  h1 { font-size: 20px; }
+  video, canvas { width: 480px; max-width: 100%; border-radius: 8px; }
+  canvas { background: #000; }
+  .row { margin: 8px 0; }
+  label { display: inline-block; min-width: 260px; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; cursor: pointer; margin-right: 8px; }
+  #start { background: #4caf50; color: #fff; }
+  #stop  { background: #f44336; color: #fff; }
+  #status { font-size: 18px; font-weight: bold; min-height: 24px; }
+  .alert { color: #ff5252; animation: blink .5s infinite alternate; }
+  @keyframes blink { to { opacity: .3; } }
+</style>
+</head>
+<body>
+<h1>Датчик движения по камере</h1>
+<video id="video" autoplay playsinline muted></video>
+<canvas id="diff" width="320" height="240"></canvas>
+
+<div class="row"><button id="start">Старт</button><button id="stop">Стоп</button></div>
+<div id="status">Камера выключена</div>
+
+<div class="row"><label>Порог яркости пикселя (0–255): <b id="vThr">25</b></label>
+  <input type="range" id="thr" min="5" max="80" value="25"></div>
+<div class="row"><label>Мин. площадь срабатывания (% кадра): <b id="vArea">2</b></label>
+  <input type="range" id="area" min="0.2" max="15" step="0.1" value="2"></div>
+<div class="row"><label>Пауза между сигналами, сек: <b id="vCd">2</b></label>
+  <input type="range" id="cd" min="1" max="10" value="2"></div>
+
+<script>
+const video = document.getElementById('video');
+const diffCanvas = document.getElementById('diff');
+const diffCtx = diffCanvas.getContext('2d', { willReadFrequently: true });
+const statusEl = document.getElementById('status');
+const W = diffCanvas.width, H = diffCanvas.height;
+
+let running = false, prev = null, prevPrev = null, cooldownUntil = 0, audioCtx = null;
+
+// Фильтр: учитываем изменение, только если оно было и в прошлом кадре — отсекает шум и вспышки
+document.getElementById('thr').oninput  = e => document.getElementById('vThr').textContent  = e.target.value;
+document.getElementById('area').oninput = e => document.getElementById('vArea').textContent = e.target.value;
+document.getElementById('cd').oninput   = e => document.getElementById('vCd').textContent   = e.target.value;
+
+document.getElementById('start').onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    video.srcObject = stream;
+    running = true; prev = null; prevPrev = null;
+    statusEl.textContent = 'Слежу за движением…';
+    requestAnimationFrame(loop);
+  } catch (err) {
+    statusEl.textContent = 'Нет доступа к камере: ' + err.message;
+  }
+};
+
+document.getElementById('stop').onclick = () => {
+  running = false;
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  statusEl.textContent = 'Камера выключена';
+};
+
+function beep() {
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'square'; o.frequency.value = 880;
+  g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.5);
+}
+
+function loop() {
+  if (!running) return;
+
+  diffCtx.drawImage(video, 0, 0, W, H);
+  const cur = diffCtx.getImageData(0, 0, W, H).data;
+
+  if (prev && prevPrev) {
+    const thr = +document.getElementById('thr').value;
+    const areaPct = +document.getElementById('area').value / 100;
+    let changed = 0;
+
+    for (let i = 0; i < cur.length; i += 4) {
+      // считаем среднее по RGB, чтобы цветные шумы не сбивали
+      const d1 = Math.abs(cur[i] - prev[i]) + Math.abs(cur[i+1] - prev[i+1]) + Math.abs(cur[i+2] - prev[i+2]);
+      const d2 = Math.abs(prev[i] - prevPrev[i]) + Math.abs(prev[i+1] - prevPrev[i+1]) + Math.abs(prev[i+2] - prevPrev[i+2]);
+      if (d1 / 3 > thr && d2 / 3 > thr) changed++;
+    }
+
+    const frac = changed / (W * H);
+    // подсвечиваем кадр красным при срабатывании
+    if (frac >= areaPct) {
+      diffCtx.fillStyle = 'rgba(255,0,0,0.25)';
+      diffCtx.fillRect(0, 0, W, H);
+    }
+
+    const now = Date.now();
+    if (frac >= areaPct && now > cooldownUntil) {
+      cooldownUntil = now + document.getElementById('cd').value * 1000;
+      statusEl.classList.add('alert');
+      statusEl.textContent = `ДВИЖЕНИЕ! (${(frac * 100).toFixed(1)}% кадра)`;
+      beep();
+      setTimeout(() => statusEl.classList.remove('alert'), 1500);
+    } else if (frac < areaPct) {
+      statusEl.textContent = `Слежу за движением… (изменений ${(frac * 100).toFixed(2)}%)`;
+    }
+  }
+
+  prevPrev = prev;
+  prev = cur.slice();
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
