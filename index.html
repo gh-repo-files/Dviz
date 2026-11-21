@@ -366,6 +366,14 @@ function checkModelAgainstClasses(m){
   var out = m.outputs[0].shape[3];
   return out === classes.length;
 }
+/* ИСПРАВЛЕНО: перед заменой модели старую освобождаем — иначе на WebGL
+   копятся «утёкшие» веса при каждом повторном обучении/открытии проекта. */
+function disposeModel(){
+  if(model){
+    try{ model.dispose(); } catch(e){}
+    model = null;
+  }
+}
 
 /* ---------- вкладки ---------- */
 document.getElementById('tabs').addEventListener('click', function(e){
@@ -528,7 +536,8 @@ $('#gallery').addEventListener('click', function(e){
 $('#btnClear').addEventListener('click', function(){
   if(!images.length && !classes.length && !model) return;
   if(!confirm('Удалить весь датасет, классы и модель?')) return;
-  images = []; classes = []; model = null; lossHistory = [];
+  images = []; classes = []; lossHistory = [];
+  disposeModel();
   idbSet('model', null).catch(function(){});
   saveState(); renderGallery(); renderClasses(); renderClassSelects(); drawLossChart();
   $('#modelStatus').textContent = 'Модель сброшена';
@@ -622,7 +631,7 @@ neusetInput.addEventListener('change', function(){
     classes = Array.isArray(p.classes) ? p.classes : [];
     images = Array.isArray(p.images) ? p.images : [];
     migrateShapes();
-    model = null;
+    disposeModel();
     lossHistory = [];
     drawLossChart();
     renderClasses(); renderClassSelects(); renderGallery();
@@ -1090,6 +1099,7 @@ function startTraining(){
   var lr = +$('#inpLr').value || 0.001;
   var augment = $('#inpAugment').checked;
   var numCls = classes.length;
+  disposeModel();
   model = buildModel(numCls);
   var optimizer = tf.train.adam(lr);
   var prepared = [];
@@ -1136,13 +1146,17 @@ function startTraining(){
           }));
         });
         var tMask = buildBatchTargets(shapeLists, numCls);
+        /* ИСПРАВЛЕНО: optimizer.minimize возвращает скаляр синхронно,
+           а не Promise. Раньше вызов .then на тензоре падал с TypeError
+           сразу после первого шага, и цикл обучения молча умирал. */
         var lossVal = 0;
-        var minPromise;
         try{
-          minPromise = optimizer.minimize(function(){
+          var cost = optimizer.minimize(function(){
             var pred = model.predict(xs);
             return detectorLoss(pred, tMask);
           }, true);
+          lossVal = cost.dataSync()[0];
+          cost.dispose();
         } catch(err){
           console.warn('train step', err);
           xs.dispose(); tMask.dispose();
@@ -1151,23 +1165,10 @@ function startTraining(){
           finish();
           return;
         }
-        minPromise.then(function(l){
-          lossVal = l.dataSync()[0];
-          l.dispose();
-        }).catch(function(err){
-          console.warn('train step', err);
-          toast('Ошибка обучения: ' + (err.message || err));
-          training = false;
-        }).then(function(){
-          xs.dispose(); tMask.dispose();
-          if(training){
-            sum += lossVal; cnt++;
-            setProgress(overall, 'Эпоха ' + ep + '/' + epochs + ' · ' + Math.round(overall * 100) + '% · батч ' + stepNo + '/' + stepsTotal + ' · loss ' + lossVal.toFixed(4));
-            tf.nextFrame().then(function(){ runBatch(i + batchSize); });
-          } else {
-            finish();
-          }
-        });
+        xs.dispose(); tMask.dispose();
+        sum += lossVal; cnt++;
+        setProgress(overall, 'Эпоха ' + ep + '/' + epochs + ' · ' + Math.round(overall * 100) + '% · батч ' + stepNo + '/' + stepsTotal + ' · loss ' + lossVal.toFixed(4));
+        tf.nextFrame().then(function(){ runBatch(i + batchSize); });
       }
       runBatch(0);
     }
@@ -1380,4 +1381,4 @@ function drawOverlay(comps){
 
 </script>
 </body>
-</html>
+  </html>
