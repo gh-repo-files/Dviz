@@ -1,121 +1,971 @@
-<!DOCTYPE html>
+<DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<title>Датчик движения</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Делатель нейросетей</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <style>
-  body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 16px; }
-  h1 { font-size: 20px; }
-  video, canvas { width: 480px; max-width: 100%; border-radius: 8px; }
-  canvas { background: #000; }
-  .row { margin: 8px 0; }
-  label { display: inline-block; min-width: 260px; }
-  button { padding: 8px 14px; border: 0; border-radius: 6px; cursor: pointer; margin-right: 8px; }
-  #start { background: #4caf50; color: #fff; }
-  #stop  { background: #f44336; color: #fff; }
-  #status { font-size: 18px; font-weight: bold; min-height: 24px; }
-  .alert { color: #ff5252; animation: blink .5s infinite alternate; }
-  @keyframes blink { to { opacity: .3; } }
+:root{ --bg:#0d1117; --card:#161c26; --line:#2a3242; --text:#e8edf4; --muted:#8b95a7; --accent:#4dd0e1; }
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+body{margin:0; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text);}
+header{padding:12px 16px 0;}
+h1{font-size:18px; margin:0 0 10px;}
+#tabs{display:flex; gap:6px; overflow-x:auto; padding-bottom:8px;}
+.tabbtn{flex:1 0 auto; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--muted); font-size:14px; cursor:pointer; white-space:nowrap;}
+.tabbtn.active{background:var(--accent); color:#04222a; border-color:var(--accent); font-weight:700;}
+main{padding:12px 16px 40px; max-width:760px; margin:0 auto;}
+.tab{display:none;}
+.tab.active{display:block;}
+.card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px;}
+.row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0;}
+button{font:inherit; border:1px solid var(--line); background:#1f2733; color:var(--text); border-radius:10px; padding:10px 14px; cursor:pointer;}
+button.primary{background:var(--accent); color:#04222a; font-weight:700; border-color:var(--accent);}
+button.danger{background:#3a1e22; color:#ff8a8a; border-color:#5c2b31;}
+button.big{width:100%; font-size:16px; padding:14px;}
+button.small{padding:6px 10px; font-size:13px;}
+button:disabled{opacity:.4; cursor:default;}
+input[type=text],select{background:#0f1420; border:1px solid var(--line); color:var(--text); border-radius:10px; padding:10px; font:inherit; min-width:0;}
+#clsName{flex:1;}
+input[type=range]{width:100%; accent-color:var(--accent);}
+label{display:block; font-size:13px; color:var(--muted); margin:10px 0;}
+label b{color:var(--text);}
+.hint{color:var(--muted); font-size:13px; line-height:1.45;}
+#dropzone{border:2px dashed var(--line); border-radius:14px; padding:26px 14px; text-align:center; color:var(--muted); margin-bottom:10px; transition:.15s;}
+#dropzone.over{border-color:var(--accent); background:rgba(77,208,225,.08);}
+.gallery{display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:8px; margin-top:10px;}
+.thumb{position:relative; border-radius:10px; overflow:hidden; aspect-ratio:1; cursor:pointer; border:1px solid var(--line);}
+.thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+.badge{position:absolute; right:4px; bottom:4px; background:rgba(0,0,0,.65); color:#fff; font-size:11px; padding:2px 6px; border-radius:8px;}
+.thumb-del{position:absolute; left:4px; top:4px; padding:2px 8px; font-size:11px; border-radius:8px; background:rgba(0,0,0,.65); color:#ff9a9a; border:none;}
+.cls-item{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line);}
+.dot{width:16px; height:16px; border-radius:50%; flex:0 0 auto;}
+.cls-name{flex:1;}
+.cls-count{color:var(--muted); font-size:12px;}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:4px 12px;}
+#lossChart{width:100%; height:120px; margin:10px 0; border-radius:10px; border:1px solid var(--line);}
+.progress-text{color:var(--muted); font-size:13px; margin:8px 0; min-height:18px;}
+.cam-wrap{position:relative; border-radius:14px; overflow:hidden; background:#000; border:1px solid var(--line);}
+#video{width:100%; display:block;}
+#video.mirrored{transform:scaleX(-1);}
+#overlay{position:absolute; inset:0; width:100%; height:100%; pointer-events:none;}
+.modal{position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center; justify-content:center; padding:12px; z-index:50;}
+.modal.hidden{display:none;}
+.modal-card{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px; max-width:760px; width:100%; max-height:92vh; overflow-y:auto;}
+#edCanvas{width:100%; touch-action:none; border-radius:10px; background:#000; display:block;}
+#toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px); background:#243044; color:#fff; padding:10px 16px; border-radius:12px; opacity:0; pointer-events:none; transition:.25s; z-index:99; max-width:90vw; text-align:center;}
+#toast.show{opacity:1; transform:translateX(-50%);}
+@media (min-width:600px){ .gallery{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));} h1{font-size:22px;} }
 </style>
 </head>
 <body>
-<h1>Датчик движения по камере</h1>
-<video id="video" autoplay playsinline muted></video>
-<canvas id="diff" width="320" height="240"></canvas>
+<header>
+  <h1>&#129504; Делатель нейросетей</h1>
+  <nav id="tabs">
+    <button class="tabbtn active" data-tab="dataset">Датасет</button>
+    <button class="tabbtn" data-tab="classes">Классы</button>
+    <button class="tabbtn" data-tab="train">Обучение</button>
+    <button class="tabbtn" data-tab="camera">Камера</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-dataset" class="tab active">
+    <div id="dropzone">
+      <p>Перетащите фото сюда, вставьте из буфера или нажмите кнопку</p>
+      <button id="btnAdd" class="primary">&#128247; Выбрать фото</button>
+    </div>
+    <div class="row">
+      <span id="datasetStats" class="hint">0 фото</span>
+      <button id="btnClear" class="danger small">Очистить всё</button>
+    </div>
+    <div id="gallery" class="gallery"></div>
+  </section>
 
-<div class="row"><button id="start">Старт</button><button id="stop">Стоп</button></div>
-<div id="status">Камера выключена</div>
+  <section id="tab-classes" class="tab">
+    <div class="card">
+      <div class="row">
+        <input id="clsName" type="text" placeholder="Название класса, например: Кот" maxlength="24">
+        <button id="btnAddClass" class="primary">&#65291;</button>
+      </div>
+      <div id="clsList"></div>
+      <p class="hint">Совет: 2&#8211;6 классов и хотя бы 20 фото на класс дают заметно лучший результат.</p>
+    </div>
+  </section>
 
-<div class="row"><label>Порог яркости пикселя (0–255): <b id="vThr">25</b></label>
-  <input type="range" id="thr" min="5" max="80" value="25"></div>
-<div class="row"><label>Мин. площадь срабатывания (% кадра): <b id="vArea">2</b></label>
-  <input type="range" id="area" min="0.2" max="15" step="0.1" value="2"></div>
-<div class="row"><label>Пауза между сигналами, сек: <b id="vCd">2</b></label>
-  <input type="range" id="cd" min="1" max="10" value="2"></div>
+  <section id="tab-train" class="tab">
+    <div class="card">
+      <div class="grid2">
+        <label>Эпохи <input id="inpEpochs" type="number" value="30" min="1" max="200"></label>
+        <label>Батч <select id="inpBatch"><option>4</option><option selected>8</option><option>16</option></select></label>
+        <label>Скорость обучения <select id="inpLr"><option value="0.001" selected>0.001</option><option value="0.0003">0.0003</option><option value="0.01">0.01</option></select></label>
+        <label class="grid2" style="align-items:end"><span><input id="inpAugment" type="checkbox" checked> Аугментация</span></label>
+      </div>
+      <button id="btnTrain" class="primary big">&#128640; Обучить модель</button>
+      <button id="btnStopTrain" class="danger big" hidden>&#9209; Остановить</button>
+      <div id="trainProgress" class="progress-text">Готово к обучению</div>
+      <canvas id="lossChart" width="600" height="160"></canvas>
+      <div class="row">
+        <button id="btnSaveModel" class="small">&#128190; Скачать модель</button>
+        <button id="btnLoadModel" class="small">&#128193; Загрузить модель</button>
+        <span id="modelStatus" class="hint"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-camera" class="tab">
+    <div class="cam-wrap">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="card">
+      <div class="row">
+        <button id="btnCam" class="primary">&#9654; Запустить камеру</button>
+        <button id="btnFlip" class="small">&#128260; Камера</button>
+      </div>
+      <label>Чувствительность &#8212; порог уверенности: <b id="thrVal">55%</b>
+        <input id="inpThr" type="range" min="10" max="95" value="55"></label>
+      <label>Мин. поле (квадрат минимального объекта): <b id="fieldVal">10%</b>
+        <input id="inpField" type="range" min="2" max="60" value="10"></label>
+      <div id="camStatus" class="hint">Модель не обучена. Обучите её во вкладке &#171;Обучение&#187;. Для доступа к камере нужен https:// или localhost.</div>
+    </div>
+  </section>
+</main>
+
+<div id="editorOverlay" class="modal hidden">
+  <div class="modal-card">
+    <div class="row">
+      <span id="edTitle">Разметка</span>
+      <button id="btnEdClose" class="small">&#10005;</button>
+    </div>
+    <canvas id="edCanvas"></canvas>
+    <div class="row">
+      <label style="margin:0">Класс: <select id="edClass"></select></label>
+      <button id="btnEdDeleteBox" class="danger small" disabled>Удалить рамку</button>
+    </div>
+    <div class="row">
+      <button id="btnEdSave" class="primary">Сохранить</button>
+      <button id="btnEdDelImg" class="danger">Удалить фото</button>
+    </div>
+    <p class="hint">Проведите пальцем по фото &#8212; появится рамка с текущим классом. Тап по рамке выделяет её: можно тянуть за углы, менять класс или удалить.</p>
+  </div>
+</div>
+
+<div id="toast"></div>
+<input type="file" id="fileInput" accept="image/*" multiple hidden>
+<input type="file" id="modelInput" accept=".json,.bin" multiple hidden>
 
 <script>
-const video = document.getElementById('video');
-const diffCanvas = document.getElementById('diff');
-const diffCtx = diffCanvas.getContext('2d', { willReadFrequently: true });
-const statusEl = document.getElementById('status');
-const W = diffCanvas.width, H = diffCanvas.height;
 
-let running = false, prev = null, prevPrev = null, cooldownUntil = 0, audioCtx = null;
+'use strict';
 
-// Фильтр: учитываем изменение, только если оно было и в прошлом кадре — отсекает шум и вспышки
-document.getElementById('thr').oninput  = e => document.getElementById('vThr').textContent  = e.target.value;
-document.getElementById('area').oninput = e => document.getElementById('vArea').textContent = e.target.value;
-document.getElementById('cd').oninput   = e => document.getElementById('vCd').textContent   = e.target.value;
+var $ = function(s){ return document.querySelector(s); };
+var uid = function(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); };
+var esc = function(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+var clamp = function(v, a, b){ return Math.min(b, Math.max(a, v)); };
+var sigmoid = function(x){ return 1 / (1 + Math.exp(-x)); };
 
-document.getElementById('start').onclick = async () => {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-    video.srcObject = stream;
-    running = true; prev = null; prevPrev = null;
-    statusEl.textContent = 'Слежу за движением…';
-    requestAnimationFrame(loop);
-  } catch (err) {
-    statusEl.textContent = 'Нет доступа к камере: ' + err.message;
-  }
-};
+var INPUT = 224, GRID = 14;
+var PALETTE = ['#ff5252','#ffb74d','#ffd54f','#81c784','#4dd0e1','#64b5f6','#ba68c8','#f06292'];
 
-document.getElementById('stop').onclick = () => {
-  running = false;
-  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
-  statusEl.textContent = 'Камера выключена';
-};
+var classes = [];
+var images = [];
+var model = null;
+var training = false;
+var lossHistory = [];
+var facing = 'user';
+var camRunning = false;
+var stream = null;
+var mirror = true;
+var lastInfer = 0;
+var detCount = 0;
 
-function beep() {
-  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-  o.type = 'square'; o.frequency.value = 880;
-  g.gain.setValueAtTime(0.3, audioCtx.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
-  o.connect(g).connect(audioCtx.destination);
-  o.start(); o.stop(audioCtx.currentTime + 0.5);
+var editRec = null, editDrag = null, editSelected = -1, editImg = null, lastCls = 0;
+
+var toastTimer = null;
+function toast(msg){
+  var t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2600);
 }
 
-function loop() {
-  if (!running) return;
+/* ---------- хранилище (IndexedDB) ---------- */
+var dbPromise = null;
+function openDB(){
+  if(dbPromise) return dbPromise;
+  dbPromise = new Promise(function(resolve, reject){
+    var req = indexedDB.open('neuro-detector', 1);
+    req.onupgradeneeded = function(e){
+      var db = e.target.result;
+      if(!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+    };
+    req.onsuccess = function(e){ resolve(e.target.result); };
+    req.onerror = function(){ reject(req.error); };
+  });
+  return dbPromise;
+}
+function idbSet(key, val){
+  return openDB().then(function(db){
+    return new Promise(function(resolve, reject){
+      var tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put(val, key);
+      tx.oncomplete = function(){ resolve(); };
+      tx.onerror = function(){ reject(tx.error); };
+    });
+  });
+}
+function idbGet(key){
+  return openDB().then(function(db){
+    return new Promise(function(resolve, reject){
+      var req = db.transaction('kv', 'readonly').objectStore('kv').get(key);
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error); };
+    });
+  });
+}
+var saveTimer = null;
+function saveState(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(function(){
+    idbSet('state', {classes: classes, images: images}).catch(function(e){ console.warn('save', e); });
+  }, 300);
+}
 
-  diffCtx.drawImage(video, 0, 0, W, H);
-  const cur = diffCtx.getImageData(0, 0, W, H).data;
+/* ---------- вкладки ---------- */
+document.getElementById('tabs').addEventListener('click', function(e){
+  var btn = e.target.closest('.tabbtn');
+  if(!btn) return;
+  document.querySelectorAll('.tabbtn').forEach(function(b){ b.classList.toggle('active', b === btn); });
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.toggle('active', t.id === 'tab-' + btn.dataset.tab); });
+});
 
-  if (prev && prevPrev) {
-    const thr = +document.getElementById('thr').value;
-    const areaPct = +document.getElementById('area').value / 100;
-    let changed = 0;
+/* ---------- классы ---------- */
+function renderClasses(){
+  var box = $('#clsList');
+  if(!classes.length){
+    box.innerHTML = '<p class="hint">Классов пока нет. Добавьте первый &#8212; например &#171;Кружка&#187; или &#171;Кот&#187;.</p>';
+    return;
+  }
+  box.innerHTML = classes.map(function(c, i){
+    var cnt = images.reduce(function(n, im){ return n + im.boxes.filter(function(b){ return b.cls === i; }).length; }, 0);
+    return '<div class="cls-item"><span class="dot" style="background:' + c.color + '"></span>' +
+      '<span class="cls-name">' + esc(c.name) + '</span>' +
+      '<span class="cls-count">' + cnt + ' рамок</span>' +
+      '<button data-del-cls="' + i + '" class="danger small">&#10005;</button></div>';
+  }).join('');
+}
+function renderClassSelects(){
+  var sel = $('#edClass');
+  sel.innerHTML = classes.map(function(c, i){ return '<option value="' + i + '">' + esc(c.name) + '</option>'; }).join('');
+  if(classes.length) sel.value = String(Math.min(lastCls, classes.length - 1));
+}
+$('#btnAddClass').addEventListener('click', function(){
+  var name = $('#clsName').value.trim();
+  if(!name){ toast('Введите название класса'); return; }
+  if(classes.length >= 8){ toast('Максимум 8 классов'); return; }
+  classes.push({name: name, color: PALETTE[classes.length % PALETTE.length]});
+  $('#clsName').value = '';
+  saveState(); renderClasses(); renderClassSelects();
+});
+$('#clsList').addEventListener('click', function(e){
+  var btn = e.target.closest('[data-del-cls]');
+  if(!btn) return;
+  var i = +btn.getAttribute('data-del-cls');
+  images.forEach(function(im){
+    im.boxes = im.boxes.filter(function(b){ return b.cls !== i; });
+    im.boxes.forEach(function(b){ if(b.cls > i) b.cls--; });
+  });
+  classes.splice(i, 1);
+  saveState(); renderClasses(); renderClassSelects(); renderGallery();
+});
+$('#clsName').addEventListener('keydown', function(e){ if(e.key === 'Enter') $('#btnAddClass').click(); });
 
-    for (let i = 0; i < cur.length; i += 4) {
-      // считаем среднее по RGB, чтобы цветные шумы не сбивали
-      const d1 = Math.abs(cur[i] - prev[i]) + Math.abs(cur[i+1] - prev[i+1]) + Math.abs(cur[i+2] - prev[i+2]);
-      const d2 = Math.abs(prev[i] - prevPrev[i]) + Math.abs(prev[i+1] - prevPrev[i+1]) + Math.abs(prev[i+2] - prevPrev[i+2]);
-      if (d1 / 3 > thr && d2 / 3 > thr) changed++;
+/* ---------- загрузка фотографий ---------- */
+var fileInput = $('#fileInput');
+fileInput.addEventListener('change', function(){
+  var files = Array.prototype.slice.call(fileInput.files || []);
+  fileInput.value = '';
+  if(files.length) addImages(files);
+});
+$('#btnAdd').addEventListener('click', function(){ fileInput.click(); });
+
+var dropzone = $('#dropzone');
+dropzone.addEventListener('dragover', function(e){ e.preventDefault(); dropzone.classList.add('over'); });
+dropzone.addEventListener('dragleave', function(){ dropzone.classList.remove('over'); });
+dropzone.addEventListener('drop', function(e){
+  e.preventDefault();
+  dropzone.classList.remove('over');
+  var files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
+  if(files.length) addImages(files);
+});
+document.addEventListener('paste', function(e){
+  var items = Array.prototype.slice.call((e.clipboardData && e.clipboardData.files) || []);
+  if(items.length) addImages(items);
+});
+
+function readAsDataURL(file){
+  return new Promise(function(resolve, reject){
+    var r = new FileReader();
+    r.onload = function(){ resolve(r.result); };
+    r.onerror = function(){ reject(r.error || new Error('read error')); };
+    r.readAsDataURL(file);
+  });
+}
+function loadImage(src){
+  return new Promise(function(resolve, reject){
+    var img = new Image();
+    img.onload = function(){ resolve(img); };
+    img.onerror = function(){ reject(new Error('decode error')); };
+    img.src = src;
+  });
+}
+function shrinkAndEncode(img){
+  var MAX = 1280;
+  var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  var scale = Math.min(1, MAX / Math.max(w, h));
+  var c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * scale));
+  c.height = Math.max(1, Math.round(h * scale));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+function addImages(files){
+  var list = (files || []).filter(function(f){ return f && f.type && f.type.indexOf('image/') === 0; });
+  if(!list.length){ toast('Это не изображения &#8212; выберите фото'); return; }
+  var added = 0, failed = 0, queue = list.slice();
+  function next(){
+    if(!queue.length || images.length >= 300){
+      saveState(); renderGallery();
+      if(images.length >= 300) toast('Лимит 300 фото');
+      if(added) toast('Добавлено фото: ' + added);
+      if(failed) toast('Не удалось прочитать: ' + failed);
+      return;
     }
+    var f = queue.shift();
+    readAsDataURL(f).then(loadImage).then(function(img){
+      return shrinkAndEncode(img);
+    }).then(function(url){
+      if(images.length < 300){ images.push({id: uid(), name: f.name || 'фото', dataUrl: url, boxes: []}); added++; }
+    }).catch(function(err){
+      console.warn('upload', f.name, err);
+      failed++;
+    }).then(function(){
+      renderGallery();
+      setTimeout(next, 0);
+    });
+  }
+  next();
+}
 
-    const frac = changed / (W * H);
-    // подсвечиваем кадр красным при срабатывании
-    if (frac >= areaPct) {
-      diffCtx.fillStyle = 'rgba(255,0,0,0.25)';
-      diffCtx.fillRect(0, 0, W, H);
+/* ---------- галерея ---------- */
+function updateStats(){
+  var annotated = 0, boxes = 0;
+  images.forEach(function(im){ if(im.boxes.length) annotated++; boxes += im.boxes.length; });
+  $('#datasetStats').textContent = images.length + ' фото · ' + annotated + ' размечено · ' + boxes + ' рамок';
+}
+function renderGallery(){
+  var g = $('#gallery');
+  if(!images.length){
+    g.innerHTML = '<p class="hint" style="grid-column:1/-1">Пусто. Загрузите фото и разметьте их &#8212; тап по фото открывает редактор рамок.</p>';
+    updateStats();
+    return;
+  }
+  g.innerHTML = images.map(function(im){
+    return '<div class="thumb" data-id="' + im.id + '">' +
+      '<img src="' + im.dataUrl + '" alt="">' +
+      (im.boxes.length ? '<span class="badge">' + im.boxes.length + '</span>' : '') +
+      '<button class="thumb-del" data-del="' + im.id + '">&#10005;</button></div>';
+  }).join('');
+  updateStats();
+}
+$('#gallery').addEventListener('click', function(e){
+  var del = e.target.closest('[data-del]');
+  if(del){
+    e.stopPropagation();
+    images = images.filter(function(im){ return im.id !== del.getAttribute('data-del'); });
+    saveState(); renderGallery();
+    return;
+  }
+  var th = e.target.closest('.thumb');
+  if(th) openEditor(th.getAttribute('data-id'));
+});
+$('#btnClear').addEventListener('click', function(){
+  if(!images.length && !classes.length) return;
+  if(!confirm('Удалить весь датасет и классы?')) return;
+  images = []; classes = []; model = null; lossHistory = [];
+  saveState(); renderGallery(); renderClasses(); renderClassSelects(); drawLossChart();
+  $('#modelStatus').textContent = 'Модель сброшена';
+});
+
+/* ---------- редактор разметки ---------- */
+var edCanvas = $('#edCanvas');
+var edCtx = edCanvas.getContext('2d');
+
+function openEditor(id){
+  var rec = null;
+  for(var k = 0; k < images.length; k++) if(images[k].id === id){ rec = images[k]; break; }
+  if(!rec) return;
+  editRec = {rec: rec, boxes: rec.boxes.map(function(b){ return {cls: b.cls, x: b.x, y: b.y, w: b.w, h: b.h}; })};
+  editSelected = -1;
+  editDrag = null;
+  $('#btnEdDeleteBox').disabled = true;
+  $('#edTitle').textContent = rec.name || 'Разметка';
+  renderClassSelects();
+  $('#edClass').disabled = !classes.length;
+  $('#editorOverlay').classList.remove('hidden');
+  loadImage(rec.dataUrl).then(function(img){
+    editImg = img;
+    var maxW = Math.min(720, window.innerWidth - 32);
+    var scale = Math.min(maxW / img.naturalWidth, 560 / img.naturalHeight, 1);
+    edCanvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    edCanvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    drawEditor();
+    if(!classes.length) toast('Сначала добавьте хотя бы один класс во вкладке «Классы»');
+  }).catch(function(){ toast('Не удалось открыть фото'); });
+}
+function closeEditor(){
+  $('#editorOverlay').classList.add('hidden');
+  editRec = null; editImg = null; editDrag = null; editSelected = -1;
+}
+function drawEditor(){
+  if(!editImg || !editRec) return;
+  var W = edCanvas.width, H = edCanvas.height;
+  edCtx.clearRect(0, 0, W, H);
+  edCtx.drawImage(editImg, 0, 0, W, H);
+  editRec.boxes.forEach(function(b, i){
+    var cls = classes[b.cls] || {color: '#ffffff', name: '?'};
+    var x = b.x * W, y = b.y * H, w = b.w * W, h = b.h * H;
+    edCtx.lineWidth = (i === editSelected) ? 4 : 2.5;
+    edCtx.strokeStyle = cls.color;
+    edCtx.strokeRect(x, y, w, h);
+    if(i === editSelected){
+      edCtx.fillStyle = cls.color;
+      [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(function(p){
+        edCtx.beginPath(); edCtx.arc(p[0], p[1], 7, 0, Math.PI * 2); edCtx.fill();
+      });
     }
-
-    const now = Date.now();
-    if (frac >= areaPct && now > cooldownUntil) {
-      cooldownUntil = now + document.getElementById('cd').value * 1000;
-      statusEl.classList.add('alert');
-      statusEl.textContent = `ДВИЖЕНИЕ! (${(frac * 100).toFixed(1)}% кадра)`;
-      beep();
-      setTimeout(() => statusEl.classList.remove('alert'), 1500);
-    } else if (frac < areaPct) {
-      statusEl.textContent = `Слежу за движением… (изменений ${(frac * 100).toFixed(2)}%)`;
+    edCtx.font = 'bold 14px system-ui, sans-serif';
+    var tw = edCtx.measureText(cls.name).width;
+    var ly = Math.max(0, y - 20);
+    edCtx.fillStyle = cls.color;
+    edCtx.fillRect(x, ly, tw + 10, 20);
+    edCtx.fillStyle = '#10151d';
+    edCtx.fillText(cls.name, x + 5, ly + 15);
+  });
+}
+function edPos(e){
+  var r = edCanvas.getBoundingClientRect();
+  return {
+    x: clamp((e.clientX - r.left) / r.width, 0, 1),
+    y: clamp((e.clientY - r.top) / r.height, 0, 1)
+  };
+}
+function hitBox(p){
+  for(var i = editRec.boxes.length - 1; i >= 0; i--){
+    var b = editRec.boxes[i], tol = 0.03;
+    if(p.x >= b.x - tol && p.x <= b.x + b.w + tol && p.y >= b.y - tol && p.y <= b.y + b.h + tol) return i;
+  }
+  return -1;
+}
+function cornerHit(p, b){
+  var tol = 0.05;
+  var corners = [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]];
+  for(var k = 0; k < 4; k++){
+    if(Math.abs(p.x - corners[k][0]) < tol && Math.abs(p.y - corners[k][1]) < tol) return k;
+  }
+  return -1;
+}
+edCanvas.addEventListener('pointerdown', function(e){
+  if(!editRec) return;
+  try{ edCanvas.setPointerCapture(e.pointerId); } catch(err){}
+  var p = edPos(e);
+  if(editSelected >= 0){
+    var corner = cornerHit(p, editRec.boxes[editSelected]);
+    if(corner >= 0){ editDrag = {mode: 'resize', corner: corner, start: p, orig: Object.assign({}, editRec.boxes[editSelected])}; return; }
+  }
+  var hit = hitBox(p);
+  if(hit >= 0){
+    editSelected = hit;
+    $('#btnEdDeleteBox').disabled = false;
+    editDrag = {mode: 'move', start: p, orig: Object.assign({}, editRec.boxes[hit])};
+    drawEditor();
+    return;
+  }
+  editSelected = -1;
+  $('#btnEdDeleteBox').disabled = true;
+  editDrag = {mode: 'new', start: p, cur: p};
+  drawEditor();
+});
+edCanvas.addEventListener('pointermove', function(e){
+  if(!editRec || !editDrag) return;
+  e.preventDefault();
+  var p = edPos(e);
+  if(editDrag.mode === 'new'){
+    editDrag.cur = p;
+    drawEditor();
+    var a = editDrag.start, c = editDrag.cur;
+    var cls = classes[+$('#edClass').value] || {color: '#ffffff'};
+    edCtx.strokeStyle = cls.color; edCtx.lineWidth = 2.5;
+    edCtx.setLineDash([6, 4]);
+    edCtx.strokeRect(Math.min(a.x, c.x) * edCanvas.width, Math.min(a.y, c.y) * edCanvas.height,
+      Math.abs(c.x - a.x) * edCanvas.width, Math.abs(c.y - a.y) * edCanvas.height);
+    edCtx.setLineDash([]);
+    return;
+  }
+  var b = editRec.boxes[editSelected];
+  if(!b) return;
+  if(editDrag.mode === 'move'){
+    b.x = clamp(editDrag.orig.x + p.x - editDrag.start.x, 0, 1 - editDrag.orig.w);
+    b.y = clamp(editDrag.orig.y + p.y - editDrag.start.y, 0, 1 - editDrag.orig.h);
+  } else {
+    var o = editDrag.orig, corner = editDrag.corner;
+    var x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
+    if(corner === 0){ x1 = p.x; y1 = p.y; }
+    if(corner === 1){ x2 = p.x; y1 = p.y; }
+    if(corner === 2){ x1 = p.x; y2 = p.y; }
+    if(corner === 3){ x2 = p.x; y2 = p.y; }
+    b.x = Math.min(x1, x2); b.y = Math.min(y1, y2);
+    b.w = Math.abs(x2 - x1); b.h = Math.abs(y2 - y1);
+  }
+  drawEditor();
+});
+function endDrag(){
+  if(!editRec || !editDrag) { editDrag = null; return; }
+  if(editDrag.mode === 'new' && editDrag.cur){
+    var a = editDrag.start, c = editDrag.cur;
+    var x = Math.min(a.x, c.x), y = Math.min(a.y, c.y);
+    var w = Math.abs(c.x - a.x), h = Math.abs(c.y - a.y);
+    if(w > 0.02 && h > 0.02){
+      if(!classes.length){
+        toast('Сначала создайте класс во вкладке «Классы»');
+      } else {
+        lastCls = +$('#edClass').value || 0;
+        editRec.boxes.push({cls: lastCls, x: x, y: y, w: w, h: h});
+        editSelected = editRec.boxes.length - 1;
+        $('#btnEdDeleteBox').disabled = false;
+      }
     }
   }
+  editDrag = null;
+  drawEditor();
+}
+edCanvas.addEventListener('pointerup', endDrag);
+edCanvas.addEventListener('pointercancel', function(){ editDrag = null; if(editRec) drawEditor(); });
+$('#edClass').addEventListener('change', function(){
+  if(editRec && editSelected >= 0){
+    lastCls = +$('#edClass').value || 0;
+    editRec.boxes[editSelected].cls = lastCls;
+    drawEditor();
+  }
+});
+$('#btnEdDeleteBox').addEventListener('click', function(){
+  if(!editRec || editSelected < 0) return;
+  editRec.boxes.splice(editSelected, 1);
+  editSelected = -1;
+  $('#btnEdDeleteBox').disabled = true;
+  drawEditor();
+});
+$('#btnEdSave').addEventListener('click', function(){
+  if(!editRec) return;
+  editRec.rec.boxes = editRec.boxes;
+  saveState(); renderGallery(); closeEditor();
+  toast('Разметка сохранена');
+});
+$('#btnEdDelImg').addEventListener('click', function(){
+  if(!editRec) return;
+  images = images.filter(function(im){ return im.id !== editRec.rec.id; });
+  saveState(); renderGallery(); closeEditor();
+});
+$('#btnEdClose').addEventListener('click', closeEditor);
+$('#editorOverlay').addEventListener('click', function(e){
+  if(e.target === $('#editorOverlay')) closeEditor();
+});
 
-  prevPrev = prev;
-  prev = cur.slice();
+/* ---------- модель ---------- */
+function buildModel(numClasses){
+  var m = tf.sequential();
+  m.add(tf.layers.conv2d({inputShape: [INPUT, INPUT, 3], filters: 16, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
+  m.add(tf.layers.conv2d({filters: 32, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
+  m.add(tf.layers.conv2d({filters: 64, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
+  m.add(tf.layers.conv2d({filters: 128, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
+  m.add(tf.layers.conv2d({filters: 128, kernelSize: 3, padding: 'same', activation: 'relu'}));
+  m.add(tf.layers.conv2d({filters: numClasses + 5, kernelSize: 1, padding: 'same'}));
+  return m;
+}
+function detectorLoss(pred, tObj, tBox, tCls){
+  return tf.tidy(function(){
+    var eps = 1e-7;
+    var pObj = pred.slice([0, 0, 0, 0], [-1, -1, -1, 1]).sigmoid();
+    var pXY = pred.slice([0, 0, 0, 1], [-1, -1, -1, 2]).sigmoid();
+    var pWH = pred.slice([0, 0, 0, 3], [-1, -1, -1, 2]).sigmoid();
+    var gxGrid = tf.range(0, GRID, 1, 'float32').reshape([1, 1, GRID, 1]);
+    var gyGrid = tf.range(0, GRID, 1, 'float32').reshape([1, GRID, 1, 1]);
+    var cellXY = tf.concat([gxGrid, gyGrid], 3);
+    var pXYabs = pXY.add(cellXY).div(GRID);
+    var pBox = tf.concat([pXYabs, pWH], 3);
+    var boxLoss = pBox.sub(tBox).square().mul(tObj).sum().div(tObj.sum().add(1e-6));
+    var wObj = tObj.mul(10).add(tf.scalar(1).sub(tObj));
+    var bce = tObj.mul(pObj.add(eps).log().neg())
+      .add(tf.scalar(1).sub(tObj).mul(pObj.neg().add(1).add(eps).log().neg()));
+    var objLoss = bce.mul(wObj).sum().div(wObj.sum());
+    var C = pred.shape[3] - 5;
+    var pCls = pred.slice([0, 0, 0, 5], [-1, -1, -1, C]).softmax();
+    var clsLoss = tCls.mul(pCls.add(eps).log().neg()).sum(3).mul(tObj).sum().div(tObj.sum().add(1e-6));
+    return boxLoss.mul(3).add(objLoss).add(clsLoss);
+  });
+}
+function buildBatchTargets(boxLists, numCls){
+  var B = boxLists.length;
+  var obj = new Float32Array(B * GRID * GRID);
+  var box = new Float32Array(B * GRID * GRID * 4);
+  var cls = new Float32Array(B * GRID * GRID * numCls);
+  boxLists.forEach(function(boxes, b){
+    boxes.forEach(function(bx){
+      var gx = clamp(Math.floor(bx.x * GRID), 0, GRID - 1);
+      var gy = clamp(Math.floor(bx.y * GRID), 0, GRID - 1);
+      var cell = b * GRID * GRID + gy * GRID + gx;
+      obj[cell] = 1;
+      box[cell * 4] = bx.x; box[cell * 4 + 1] = bx.y; box[cell * 4 + 2] = bx.w; box[cell * 4 + 3] = bx.h;
+      var ci = clamp(bx.cls | 0, 0, numCls - 1);
+      cls[cell * numCls + ci] = 1;
+    });
+  });
+  return {
+    obj: tf.tensor4d(obj, [B, GRID, GRID, 1]),
+    box: tf.tensor4d(box, [B, GRID, GRID, 4]),
+    cls: tf.tensor4d(cls, [B, GRID, GRID, numCls])
+  };
+}
+function shuffle(arr){
+  for(var i = arr.length - 1; i > 0; i--){
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+var scratch = document.createElement('canvas');
+scratch.width = INPUT; scratch.height = INPUT;
+function drawAug(base, flip){
+  var ctx = scratch.getContext('2d');
+  ctx.filter = 'none';
+  ctx.save();
+  if(flip){ ctx.translate(INPUT, 0); ctx.scale(-1, 1); }
+  try{ ctx.filter = 'brightness(' + (0.8 + Math.random() * 0.5).toFixed(2) + ')'; } catch(e){}
+  ctx.drawImage(base, 0, 0);
+  ctx.restore();
+  ctx.filter = 'none';
+  return scratch;
+}
+function setTrainingUI(on){
+  $('#btnTrain').disabled = on;
+  $('#btnStopTrain').hidden = !on;
+}
+function drawLossChart(){
+  var c = $('#lossChart');
+  var ctx = c.getContext('2d');
+  var W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#151a24';
+  ctx.fillRect(0, 0, W, H);
+  if(!lossHistory.length) return;
+  var maxL = Math.max.apply(null, lossHistory), minL = Math.min.apply(null, lossHistory);
+  var pad = 10;
+  ctx.strokeStyle = '#4dd0e1';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  lossHistory.forEach(function(v, i){
+    var x = pad + i * (W - 2 * pad) / Math.max(1, lossHistory.length - 1);
+    var y = H - pad - (maxL === minL ? (H / 2 - pad) : (v - minL) / (maxL - minL) * (H - 2 * pad));
+    if(i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+}
+function startTraining(){
+  if(training) return;
+  if(typeof tf === 'undefined'){ toast('Не загрузился TensorFlow.js &#8212; нужен интернет при первом открытии'); return; }
+  if(!classes.length){ toast('Сначала добавьте классы'); return; }
+  var annotated = images.filter(function(im){ return im.boxes.length > 0; });
+  if(!annotated.length){ toast('Разметьте хотя бы одно фото'); return; }
+  training = true;
+  setTrainingUI(true);
+  var epochs = clamp(+$('#inpEpochs').value || 30, 1, 200);
+  var batchSize = +$('#inpBatch').value || 8;
+  var lr = +$('#inpLr').value || 0.001;
+  var augment = $('#inpAugment').checked;
+  var numCls = classes.length;
+  model = buildModel(numCls);
+  var optimizer = tf.train.adam(lr);
+  var prepared = [];
+  var loadAll = annotated.map(function(rec){
+    return loadImage(rec.dataUrl).then(function(img){
+      var c = document.createElement('canvas');
+      c.width = INPUT; c.height = INPUT;
+      c.getContext('2d').drawImage(img, 0, 0, INPUT, INPUT);
+      prepared.push({canvas: c, boxes: rec.boxes.map(function(b){ return {cls: b.cls, x: b.x, y: b.y, w: b.w, h: b.h}; })});
+    }).catch(function(){});
+  });
+  Promise.all(loadAll).then(function(){
+    if(!prepared.length){ toast('Не удалось подготовить фото'); training = false; setTrainingUI(false); return; }
+    lossHistory = [];
+    var ep = 0;
+    function runEpoch(){
+      if(ep >= epochs || !training) return finish();
+      ep++;
+      var idx = shuffle(prepared.map(function(_, i){ return i; }));
+      var sum = 0, cnt = 0;
+      function runBatch(i){
+        if(i >= idx.length || !training){
+          lossHistory.push(sum / Math.max(1, cnt));
+          drawLossChart();
+          $('#trainProgress').textContent = 'Эпоха ' + ep + '/' + epochs + ' · средний loss ' + (sum / Math.max(1, cnt)).toFixed(4);
+          setTimeout(runEpoch, 0);
+          return;
+        }
+        var part = idx.slice(i, i + batchSize);
+        var xsList = [], boxLists = [];
+        part.forEach(function(j){
+          var flip = augment && Math.random() < 0.5;
+          xsList.push(drawAug(prepared[j].canvas, flip));
+          boxLists.push(prepared[j].boxes.map(function(b){
+            return flip ? {cls: b.cls, x: 1 - b.x, y: b.y, w: b.w, h: b.h} : {cls: b.cls, x: b.x, y: b.y, w: b.w, h: b.h};
+          }));
+        });
+        var xs = tf.stack(xsList.map(function(c){ return tf.browser.fromPixels(c).toFloat().div(255); }));
+        var t = buildBatchTargets(boxLists, numCls);
+        var lossVal = 0;
+        var minPromise = optimizer.minimize(function(){
+          var pred = model.predict(xs);
+          return detectorLoss(pred, t.obj, t.box, t.cls);
+        }, true);
+        minPromise.then(function(l){
+          lossVal = l.dataSync()[0];
+          l.dispose();
+        }).catch(function(err){
+          console.warn('train step', err);
+          toast('Ошибка обучения: ' + err.message);
+          training = false;
+        }).then(function(){
+          xs.dispose(); t.obj.dispose(); t.box.dispose(); t.cls.dispose();
+          if(training){
+            sum += lossVal; cnt++;
+            $('#trainProgress').textContent = 'Эпоха ' + ep + '/' + epochs + ' · батч ' + Math.min(i + batchSize, idx.length) + '/' + idx.length + ' · loss ' + lossVal.toFixed(4);
+            tf.nextFrame().then(function(){ runBatch(i + batchSize); });
+          } else {
+            finish();
+          }
+        });
+      }
+      runBatch(0);
+    }
+    function finish(){
+      optimizer.dispose();
+      prepared.length = 0;
+      var stopped = !training && ep <= epochs;
+      training = false;
+      setTrainingUI(false);
+      $('#trainProgress').textContent += stopped ? ' · остановлено' : ' · обучение завершено ✓';
+      if(model) $('#modelStatus').textContent = 'Модель обучена и активна (' + classes.length + ' кл.)';
+    }
+    runEpoch();
+  });
+}
+$('#btnTrain').addEventListener('click', startTraining);
+$('#btnStopTrain').addEventListener('click', function(){ training = false; });
+$('#btnSaveModel').addEventListener('click', function(){
+  if(!model){ toast('Сначала обучите модель'); return; }
+  model.save('downloads://neuro-detector-model').then(function(){
+    toast('Модель скачана: neuro-detector-model.json и .bin');
+  }).catch(function(){ toast('Не удалось сохранить модель'); });
+});
+var modelInput = $('#modelInput');
+$('#btnLoadModel').addEventListener('click', function(){ modelInput.click(); });
+modelInput.addEventListener('change', function(){
+  var files = Array.prototype.slice.call(modelInput.files || []);
+  modelInput.value = '';
+  var json = null, bin = null;
+  files.forEach(function(f){
+    if(f.name.indexOf('.json') === f.name.length - 5) json = f;
+    else if(f.name.indexOf('.bin') === f.name.length - 4 || f.name.indexOf('.pb') === f.name.length - 3) bin = f;
+  });
+  if(!json){ toast('Выберите файл модели .json (и рядом .bin)'); return; }
+  var list = bin ? [json, bin] : [json];
+  tf.loadLayersModel(tf.io.browserFiles(list)).then(function(m){
+    model = m;
+    var outCh = model.outputs[0].shape[3] - 5;
+    $('#modelStatus').textContent = outCh === classes.length
+      ? 'Модель загружена (' + outCh + ' классов)'
+      : 'Загружена модель на ' + outCh + ' кл., а сейчас классов ' + classes.length + ' — переобучите';
+    toast('Модель загружена');
+  }).catch(function(err){
+    console.warn(err);
+    toast('Ошибка загрузки модели');
+  });
+});
+
+/* ---------- камера ---------- */
+var video = $('#video'), overlay = $('#overlay');
+var octx = overlay.getContext('2d');
+var procCanvas = document.createElement('canvas');
+procCanvas.width = INPUT; procCanvas.height = INPUT;
+var procCtx = procCanvas.getContext('2d', {willReadFrequently: true});
+
+$('#inpThr').addEventListener('input', function(){ $('#thrVal').textContent = $('#inpThr').value + '%'; });
+$('#inpField').addEventListener('input', function(){ $('#fieldVal').textContent = $('#inpField').value + '%'; });
+$('#btnCam').addEventListener('click', function(){ camRunning ? stopCam() : startCam(); });
+$('#btnFlip').addEventListener('click', function(){
+  facing = facing === 'user' ? 'environment' : 'user';
+  if(camRunning){ stopCam(); startCam(); }
+});
+video.addEventListener('loadedmetadata', function(){
+  overlay.width = video.videoWidth || 640;
+  overlay.height = video.videoHeight || 480;
+});
+function startCam(){
+  if(!model){ toast('Сначала обучите модель во вкладке «Обучение»'); return; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    $('#camStatus').textContent = 'Браузер не поддерживает камеру. Нужен https:// или localhost.';
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({
+    video: {facingMode: facing, width: {ideal: 1280}, height: {ideal: 720}},
+    audio: false
+  }).then(function(s){
+    stream = s;
+    video.srcObject = stream;
+    mirror = facing === 'user';
+    video.classList.toggle('mirrored', mirror);
+    return video.play();
+  }).then(function(){
+    overlay.width = video.videoWidth || 640;
+    overlay.height = video.videoHeight || 480;
+    camRunning = true;
+    $('#btnCam').textContent = '⏹ Остановить';
+    $('#camStatus').textContent = 'Камера работает. Модель ищет совпадения с вашим датасетом.';
+    requestAnimationFrame(loop);
+  }).catch(function(e){
+    $('#camStatus').textContent = 'Нет доступа к камере: ' + (e.message || e) + '. Нужен https:// или localhost.';
+  });
+}
+function stopCam(){
+  camRunning = false;
+  if(stream) stream.getTracks().forEach(function(t){ t.stop(); });
+  stream = null;
+  video.srcObject = null;
+  $('#btnCam').textContent = '▶ Запустить камеру';
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  $('#camStatus').textContent = 'Камера остановлена.';
+}
+function loop(){
+  if(!camRunning) return;
+  var now = performance.now();
+  if(now - lastInfer > 180){
+    lastInfer = now;
+    try{ runDetection(); } catch(e){ console.warn(e); }
+  }
   requestAnimationFrame(loop);
 }
+function thr(){ return +$('#inpThr').value / 100; }
+function minField(){ return +$('#inpField').value / 100; }
+function runDetection(){
+  if(!model || video.readyState < 2) return;
+  procCtx.drawImage(video, 0, 0, INPUT, INPUT);
+  var dets = tf.tidy(function(){
+    var input = tf.browser.fromPixels(procCanvas).toFloat().div(255).expandDims(0);
+    var pred = model.predict(input);
+    return decodePred(pred.dataSync(), thr());
+  });
+  drawOverlay(dets);
+  $('#camStatus').textContent = 'Объектов в кадре: ' + dets.length + ' · порог ' + $('#inpThr').value + '% · мин. поле ' + $('#inpField').value + '%';
+}
+function decodePred(data, thrVal){
+  var Ct = model.outputs[0].shape[3];
+  var numCls = Ct - 5;
+  var out = [];
+  if(numCls <= 0) return out;
+  for(var gy = 0; gy < GRID; gy++){
+    for(var gx = 0; gx < GRID; gx++){
+      var off = (gy * GRID + gx) * Ct;
+      var obj = sigmoid(data[off]);
+      if(obj < 0.02) continue;
+      var bestC = 0, bestP = -1;
+      for(var c = 0; c < numCls; c++){
+        var p = sigmoid(data[off + 5 + c]);
+        if(p > bestP){ bestP = p; bestC = c; }
+      }
+      var conf = obj * bestP;
+      if(conf < thrVal) continue;
+      var sx = sigmoid(data[off + 1]), sy = sigmoid(data[off + 2]);
+      var w = sigmoid(data[off + 3]), h = sigmoid(data[off + 4]);
+      out.push({x: (gx + sx) / GRID - w / 2, y: (gy + sy) / GRID - h / 2, w: w, h: h, conf: conf, cls: bestC});
+    }
+  }
+  return nms(out, 0.4);
+}
+function iou(a, b){
+  var x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  var x2 = Math.min(a.x + a.w, b.x + b.w), y2 = Math.min(a.y + a.h, b.y + b.h);
+  var inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  var uni = a.w * a.h + b.w * b.h - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+function nms(list, iouThr){
+  list.sort(function(a, b){ return b.conf - a.conf; });
+  var keep = [];
+  list.forEach(function(d){
+    var ok = true;
+    for(var i = 0; i < keep.length; i++) if(iou(keep[i], d) >= iouThr){ ok = false; break; }
+    if(ok) keep.push(d);
+  });
+  return keep;
+}
+function drawOverlay(dets){
+  var W = overlay.width, H = overlay.height;
+  octx.clearRect(0, 0, W, H);
+  var minSide = minField() * Math.min(W, H);
+  var sq = minSide, cx = W / 2, cy = H / 2;
+  octx.save();
+  octx.strokeStyle = 'rgba(255,255,255,.55)';
+  octx.setLineDash([6, 6]);
+  octx.lineWidth = 2;
+  octx.strokeRect(cx - sq / 2, cy - sq / 2, sq, sq);
+  octx.restore();
+  dets.forEach(function(d){
+    var bw = d.w * W, bh = d.h * H;
+    if(Math.min(bw, bh) < minSide) return;
+    var cls = classes[d.cls] || {color: '#ffffff', name: '?'};
+    var color = cls.color;
+    octx.save();
+    if(mirror) octx.setTransform(-1, 0, 0, 1, W, 0);
+    octx.strokeStyle = color;
+    octx.lineWidth = Math.max(2, H / 200);
+    octx.strokeRect(d.x * W, d.y * H, bw, bh);
+    octx.restore();
+    var lx = mirror ? W - (d.x * W + bw) : d.x * W;
+    var label = cls.name + ' ' + Math.round(d.conf * 100) + '%';
+    octx.font = 'bold ' + Math.max(12, Math.round(H / 30)) + 'px system-ui, sans-serif';
+    var tw = octx.measureText(label).width;
+    var ly = Math.max(22, d.y * H);
+    octx.fillStyle = color;
+    octx.fillRect(lx, ly - 22, tw + 10, 22);
+    octx.fillStyle = '#10151d';
+    octx.fillText(label, lx + 5, ly - 6);
+  });
+}
+
+/* ---------- старт ---------- */
+(function init(){
+  idbGet('state').then(function(st){
+    if(st){
+      classes = st.classes || [];
+      images = st.images || [];
+    }
+  }).catch(function(){})
+  .then(function(){
+    renderClasses(); renderClassSelects(); renderGallery();
+  });
+})();
+
 </script>
 </body>
 </html>
