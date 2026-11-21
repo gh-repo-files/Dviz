@@ -46,6 +46,8 @@ label b{color:var(--text);}
 .grid2{display:grid; grid-template-columns:1fr 1fr; gap:4px 12px;}
 #lossChart{width:100%; height:120px; margin:10px 0; border-radius:10px; border:1px solid var(--line);}
 .progress-text{color:var(--muted); font-size:13px; margin:8px 0; min-height:18px;}
+#progressBar{height:10px; background:#0f1420; border:1px solid var(--line); border-radius:8px; overflow:hidden; margin:8px 0;}
+#progressBarFill{height:100%; width:0%; background:var(--accent); transition:width .2s;}
 .cam-wrap{position:relative; border-radius:14px; overflow:hidden; background:#000; border:1px solid var(--line);}
 #video{width:100%; display:block;}
 #video.mirrored{transform:scaleX(-1);}
@@ -103,6 +105,7 @@ label b{color:var(--text);}
       </div>
       <button id="btnTrain" class="primary big">&#128640; Обучить модель</button>
       <button id="btnStopTrain" class="danger big" hidden>&#9209; Остановить</button>
+      <div id="progressBar"><div id="progressBarFill"></div></div>
       <div id="trainProgress" class="progress-text">Готово к обучению</div>
       <canvas id="lossChart" width="600" height="160"></canvas>
       <div class="row">
@@ -229,7 +232,6 @@ function mirroredShape(s){
   else m.pts = m.pts.map(function(p){ return [1 - p[0], p[1]]; }).reverse();
   return m;
 }
-/* Расстояние от точки до отрезка — для упрощения лассо */
 function distToSeg(p, a, b){
   var dx = b[0] - a[0], dy = b[1] - a[1];
   var len2 = dx * dx + dy * dy;
@@ -237,7 +239,6 @@ function distToSeg(p, a, b){
   var t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2, 0, 1);
   return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
 }
-/* Упрощение полигона (Дуглас–Пекер), eps в долях изображения */
 function simplifyPoly(pts, eps){
   if(pts.length < 4) return pts;
   var keep = new Array(pts.length);
@@ -334,7 +335,6 @@ function saveState(){
     idbSet('state', {classes: classes, images: images}).catch(function(e){ console.warn('save', e); });
   }, 300);
 }
-/* Старые разметки (только x,y,w,h) превращаем в фигуры */
 function migrateShapes(){
   images.forEach(function(im){
     (im.boxes || []).forEach(function(s){
@@ -700,7 +700,6 @@ function closeEditor(){
   $('#editorOverlay').classList.add('hidden');
   editRec = null; editImg = null; editDrag = null; editSelected = -1;
 }
-/* Сохранить текущую разметку и сразу открыть следующее неразмеченное фото */
 function saveAndNext(){
   if(!editRec) return;
   editRec.rec.boxes = editRec.boxes;
@@ -787,7 +786,6 @@ function drawEditor(){
       edCtx.globalAlpha = 1;
       edCtx.strokeRect(Math.min(a.x, c.x) * W, Math.min(a.y, c.y) * H, Math.abs(c.x - a.x) * W, Math.abs(c.y - a.y) * H);
     } else if(editDrag.mode === 'lasso' && editDrag.pts.length){
-      /* во время рисования — открытая линия, точно следующая за курсором */
       edCtx.globalAlpha = 1;
       edCtx.beginPath();
       for(var i = 0; i < editDrag.pts.length; i++){
@@ -866,7 +864,6 @@ edCanvas.addEventListener('pointermove', function(e){
     return;
   }
   if(editDrag.mode === 'lasso'){
-    /* интерполяция: линия следует за курсором непрерывно, без скачков */
     var last = editDrag.pts[editDrag.pts.length - 1];
     var dx = p.x - last[0], dy = p.y - last[1];
     var dist = Math.hypot(dx, dy);
@@ -1037,22 +1034,28 @@ function shuffle(arr){
   }
   return arr;
 }
-var scratch = document.createElement('canvas');
-scratch.width = INPUT; scratch.height = INPUT;
+/* ИСПРАВЛЕНО: каждое аугментированное фото получает свой холст.
+   Раньше все фото батча ссылались на один и тот же canvas и модель
+   обучалась фактически на одном последнем снимке. */
 function drawAug(base, flip){
-  var ctx = scratch.getContext('2d');
-  ctx.filter = 'none';
+  var c = document.createElement('canvas');
+  c.width = INPUT; c.height = INPUT;
+  var ctx = c.getContext('2d');
   ctx.save();
   if(flip){ ctx.translate(INPUT, 0); ctx.scale(-1, 1); }
   try{ ctx.filter = 'brightness(' + (0.8 + Math.random() * 0.5).toFixed(2) + ')'; } catch(e){}
   ctx.drawImage(base, 0, 0);
   ctx.restore();
-  ctx.filter = 'none';
-  return scratch;
+  return c;
 }
 function setTrainingUI(on){
   $('#btnTrain').disabled = on;
   $('#btnStopTrain').hidden = !on;
+  if(!on){ $('#progressBarFill').style.width = '0%'; }
+}
+function setProgress(frac, text){
+  $('#progressBarFill').style.width = Math.round(clamp(frac, 0, 1) * 100) + '%';
+  if(text) $('#trainProgress').textContent = text;
 }
 function drawLossChart(){
   var c = $('#lossChart');
@@ -1090,12 +1093,14 @@ function startTraining(){
   model = buildModel(numCls);
   var optimizer = tf.train.adam(lr);
   var prepared = [];
-  var loadAll = annotated.map(function(rec){
+  setProgress(0, 'Готовлю фото: 0 из ' + annotated.length + '…');
+  var loadAll = annotated.map(function(rec, i){
     return loadImage(rec.dataUrl).then(function(img){
       var c = document.createElement('canvas');
       c.width = INPUT; c.height = INPUT;
       c.getContext('2d').drawImage(img, 0, 0, INPUT, INPUT);
       prepared.push({canvas: c, shapes: rec.boxes.map(cloneShape)});
+      if(i % 10 === 0) setProgress(0, 'Готовлю фото: ' + prepared.length + ' из ' + annotated.length + '…');
     }).catch(function(){});
   });
   Promise.all(loadAll).then(function(){
@@ -1106,41 +1111,58 @@ function startTraining(){
       if(ep >= epochs || !training) return finish();
       ep++;
       var idx = shuffle(prepared.map(function(_, i){ return i; }));
+      var stepsTotal = Math.ceil(idx.length / batchSize);
       var sum = 0, cnt = 0;
       function runBatch(i){
         if(i >= idx.length || !training){
           lossHistory.push(sum / Math.max(1, cnt));
           drawLossChart();
-          $('#trainProgress').textContent = 'Эпоха ' + ep + '/' + epochs + ' · средний loss ' + (sum / Math.max(1, cnt)).toFixed(4);
+          setProgress(ep / epochs, 'Эпоха ' + ep + '/' + epochs + ' · средний loss ' + (sum / Math.max(1, cnt)).toFixed(4));
           setTimeout(runEpoch, 0);
           return;
         }
         var part = idx.slice(i, i + batchSize);
-        var xsList = [], shapeLists = [];
-        part.forEach(function(j){
-          var flip = augment && Math.random() < 0.5;
-          xsList.push(drawAug(prepared[j].canvas, flip));
-          shapeLists.push(flip ? prepared[j].shapes.map(mirroredShape) : prepared[j].shapes.map(cloneShape));
+        var shapeLists = [];
+        var stepNo = Math.floor(i / batchSize) + 1;
+        var overall = ((ep - 1) * stepsTotal + stepNo) / (epochs * stepsTotal);
+        setProgress(overall, 'Эпоха ' + ep + '/' + epochs + ' · ' + Math.round(overall * 100) + '% · батч ' + stepNo + '/' + stepsTotal +
+          (ep === 1 && stepNo === 1 ? ' · первый шаг самый долгий, секунды или десятки секунд' : ''));
+        var xs = tf.tidy(function(){
+          return tf.stack(part.map(function(j){
+            var flip = augment && Math.random() < 0.5;
+            var img = drawAug(prepared[j].canvas, flip);
+            shapeLists.push(flip ? prepared[j].shapes.map(mirroredShape) : prepared[j].shapes.map(cloneShape));
+            return tf.browser.fromPixels(img).toFloat().div(255);
+          }));
         });
-        var xs = tf.stack(xsList.map(function(c){ return tf.browser.fromPixels(c).toFloat().div(255); }));
         var tMask = buildBatchTargets(shapeLists, numCls);
         var lossVal = 0;
-        var minPromise = optimizer.minimize(function(){
-          var pred = model.predict(xs);
-          return detectorLoss(pred, tMask);
-        }, true);
+        var minPromise;
+        try{
+          minPromise = optimizer.minimize(function(){
+            var pred = model.predict(xs);
+            return detectorLoss(pred, tMask);
+          }, true);
+        } catch(err){
+          console.warn('train step', err);
+          xs.dispose(); tMask.dispose();
+          toast('Ошибка обучения: ' + (err.message || err));
+          training = false;
+          finish();
+          return;
+        }
         minPromise.then(function(l){
           lossVal = l.dataSync()[0];
           l.dispose();
         }).catch(function(err){
           console.warn('train step', err);
-          toast('Ошибка обучения: ' + err.message);
+          toast('Ошибка обучения: ' + (err.message || err));
           training = false;
         }).then(function(){
           xs.dispose(); tMask.dispose();
           if(training){
             sum += lossVal; cnt++;
-            $('#trainProgress').textContent = 'Эпоха ' + ep + '/' + epochs + ' · батч ' + Math.min(i + batchSize, idx.length) + '/' + idx.length + ' · loss ' + lossVal.toFixed(4);
+            setProgress(overall, 'Эпоха ' + ep + '/' + epochs + ' · ' + Math.round(overall * 100) + '% · батч ' + stepNo + '/' + stepsTotal + ' · loss ' + lossVal.toFixed(4));
             tf.nextFrame().then(function(){ runBatch(i + batchSize); });
           } else {
             finish();
@@ -1152,7 +1174,7 @@ function startTraining(){
     function finish(){
       optimizer.dispose();
       prepared.length = 0;
-      var stopped = !training && ep <= epochs;
+      var stopped = !training;
       training = false;
       setTrainingUI(false);
       $('#trainProgress').textContent += stopped ? ' · остановлено' : ' · обучение завершено ✓';
@@ -1241,7 +1263,6 @@ function runDetection(){
   });
   drawOverlay(comps);
 }
-/* Декодирование маски: ячейки с уверенностью выше порога собираем в связные области */
 function decodeMasks(data, thrVal){
   var C = model.outputs[0].shape[3];
   var G = GRID;
