@@ -58,6 +58,10 @@ label b{color:var(--text);}
 #edCanvas{width:100%; touch-action:none; border-radius:10px; background:#000; display:block;}
 #toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px); background:#243044; color:#fff; padding:10px 16px; border-radius:12px; opacity:0; pointer-events:none; transition:.25s; z-index:99; max-width:90vw; text-align:center;}
 #toast.show{opacity:1; transform:translateX(-50%);}
+/* ИСПРАВЛЕНО: вместо display:none (атрибут hidden) — невидимое, но
+   «живое» поле файла: в некоторых мобильных браузерах display:none
+   ломает выбор файла. */
+.visually-hidden{position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap;}
 @media (min-width:600px){ .gallery{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));} h1{font-size:22px;} }
 </style>
 </head>
@@ -161,8 +165,8 @@ label b{color:var(--text);}
 </div>
 
 <div id="toast"></div>
-<input type="file" id="fileInput" accept="image/*" multiple hidden>
-<input type="file" id="neusetInput" accept=".neuset,.json" hidden>
+<input type="file" id="fileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.avif" multiple class="visually-hidden">
+<input type="file" id="neusetInput" class="visually-hidden">
 
 <script>
 
@@ -366,8 +370,6 @@ function checkModelAgainstClasses(m){
   var out = m.outputs[0].shape[3];
   return out === classes.length;
 }
-/* ИСПРАВЛЕНО: перед заменой модели старую освобождаем — иначе на WebGL
-   копятся «утёкшие» веса при каждом повторном обучении/открытии проекта. */
 function disposeModel(){
   if(model){
     try{ model.dispose(); } catch(e){}
@@ -473,8 +475,14 @@ function shrinkAndEncode(img){
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   return c.toDataURL('image/jpeg', 0.85);
 }
+/* ИСПРАВЛЕНО: некоторые файловые менеджеры отдают фото без MIME-типа
+   (например, HEIC) — раньше такие файлы молча отсекались.
+   Теперь принимаем и по типу, и по расширению имени. */
+var IMG_EXT = /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i;
 function addImages(files){
-  var list = (files || []).filter(function(f){ return f && f.type && f.type.indexOf('image/') === 0; });
+  var list = (files || []).filter(function(f){
+    return f && ((f.type && f.type.indexOf('image/') === 0) || IMG_EXT.test(f.name || ''));
+  });
   if(!list.length){ toast('Это не изображения &#8212; выберите фото'); return; }
   var added = 0, failed = 0, queue = list.slice();
   function next(){
@@ -616,7 +624,11 @@ function finishSaveNeuset(payload){
   }
 }
 
-/* Открыть .neuset */
+/* Открыть .neuset
+   ИСПРАВЛЕНО: у поля выбора больше нет фильтра accept=".neuset,.json" —
+   на Android файловые менеджеры часто не позволяют выбрать файл с
+   неизвестным расширением (он выглядит «серым» и не нажимается).
+   Теперь можно выбрать любой файл, а проверка формата идёт здесь. */
 var neusetInput = $('#neusetInput');
 $('#btnOpenSet').addEventListener('click', function(){ neusetInput.click(); });
 neusetInput.addEventListener('change', function(){
@@ -1043,9 +1055,6 @@ function shuffle(arr){
   }
   return arr;
 }
-/* ИСПРАВЛЕНО: каждое аугментированное фото получает свой холст.
-   Раньше все фото батча ссылались на один и тот же canvas и модель
-   обучалась фактически на одном последнем снимке. */
 function drawAug(base, flip){
   var c = document.createElement('canvas');
   c.width = INPUT; c.height = INPUT;
@@ -1208,31 +1217,50 @@ video.addEventListener('loadedmetadata', function(){
   overlay.width = video.videoWidth || 640;
   overlay.height = video.videoHeight || 480;
 });
+/* ИСПРАВЛЕНО: понятные расшифровки ошибок камеры */
+function camErrorText(e){
+  var n = (e && e.name) || '';
+  if(n === 'NotAllowedError' || n === 'PermissionDeniedError') return 'Доступ к камере запрещён. Разрешите его в настройках сайта (значок замка слева в адресной строке) и попробуйте снова.';
+  if(n === 'NotFoundError' || n === 'DevicesNotFoundError') return 'Камера не найдена на этом устройстве.';
+  if(n === 'NotReadableError' || n === 'TrackStartError') return 'Камера занята другой программой. Закройте её и попробуйте снова.';
+  if(n === 'OverconstrainedError') return 'Запрошенный режим камеры недоступен.';
+  return (e && e.message) ? e.message : 'неизвестная ошибка';
+}
 function startCam(){
   if(!model){ toast('Сначала обучите модель во вкладке «Обучение»'); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    $('#camStatus').textContent = 'Браузер не поддерживает камеру. Нужен https:// или localhost.';
+    $('#camStatus').textContent = window.isSecureContext
+      ? 'Браузер не поддерживает камеру. Попробуйте Chrome или обновите браузер.'
+      : 'Для доступа к камере нужен https:// или localhost. Если открыли файл с диска — попробуйте Chrome или запустите через локальный сервер.';
     return;
   }
-  navigator.mediaDevices.getUserMedia({
-    video: {facingMode: facing, width: {ideal: 1280}, height: {ideal: 720}},
-    audio: false
-  }).then(function(s){
-    stream = s;
-    video.srcObject = stream;
-    mirror = facing === 'user';
-    video.classList.toggle('mirrored', mirror);
-    return video.play();
-  }).then(function(){
-    overlay.width = video.videoWidth || 640;
-    overlay.height = video.videoHeight || 480;
-    camRunning = true;
-    $('#btnCam').textContent = '⏹ Остановить';
-    $('#camStatus').textContent = 'Камера работает. Модель ищет совпадения с вашим датасетом.';
-    requestAnimationFrame(loop);
-  }).catch(function(e){
-    $('#camStatus').textContent = 'Нет доступа к камере: ' + (e.message || e) + '. Нужен https:// или localhost.';
-  });
+  $('#camStatus').textContent = 'Запрашиваю доступ к камере…';
+  var open = function(constraints){
+    return navigator.mediaDevices.getUserMedia(constraints).then(function(s){
+      stream = s;
+      video.srcObject = stream;
+      mirror = facing === 'user';
+      video.classList.toggle('mirrored', mirror);
+      return video.play();
+    }).then(function(){
+      overlay.width = video.videoWidth || 640;
+      overlay.height = video.videoHeight || 480;
+      camRunning = true;
+      $('#btnCam').textContent = '⏹ Остановить';
+      $('#camStatus').textContent = 'Камера работает. Модель ищет совпадения с вашим датасетом.';
+      requestAnimationFrame(loop);
+    });
+  };
+  /* ИСПРАВЛЕНО: сначала пробуем с facingMode (нужно на телефоне),
+     при отказе повторяем без него — так камера открывается и на ПК,
+     где «задней» камеры просто нет. */
+  open({video: {facingMode: facing, width: {ideal: 1280}, height: {ideal: 720}}, audio: false})
+    .catch(function(e1){
+      return open({video: true, audio: false}).catch(function(e2){
+        console.warn('camera', e1, e2);
+        $('#camStatus').textContent = 'Не удалось включить камеру: ' + camErrorText(e2) + (window.isSecureContext ? '' : ' Нужен https:// или localhost.');
+      });
+    });
 }
 function stopCam(){
   camRunning = false;
@@ -1381,4 +1409,4 @@ function drawOverlay(comps){
 
 </script>
 </body>
-  </html>
+</html>
