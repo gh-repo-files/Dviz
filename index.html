@@ -1,9 +1,9 @@
-<DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Делатель нейросетей</title>
+<title>Neuset</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <style>
 :root{ --bg:#0d1117; --card:#161c26; --line:#2a3242; --text:#e8edf4; --muted:#8b95a7; --accent:#4dd0e1; }
@@ -24,6 +24,7 @@ button.primary{background:var(--accent); color:#04222a; font-weight:700; border-
 button.danger{background:#3a1e22; color:#ff8a8a; border-color:#5c2b31;}
 button.big{width:100%; font-size:16px; padding:14px;}
 button.small{padding:6px 10px; font-size:13px;}
+button.small.active{background:var(--accent); color:#04222a; border-color:var(--accent); font-weight:700;}
 button:disabled{opacity:.4; cursor:default;}
 input[type=text],select{background:#0f1420; border:1px solid var(--line); color:var(--text); border-radius:10px; padding:10px; font:inherit; min-width:0;}
 #clsName{flex:1;}
@@ -60,7 +61,7 @@ label b{color:var(--text);}
 </head>
 <body>
 <header>
-  <h1>&#129504; Делатель нейросетей</h1>
+  <h1>&#129504; Neuset</h1>
   <nav id="tabs">
     <button class="tabbtn active" data-tab="dataset">Датасет</button>
     <button class="tabbtn" data-tab="classes">Классы</button>
@@ -77,6 +78,11 @@ label b{color:var(--text);}
     <div class="row">
       <span id="datasetStats" class="hint">0 фото</span>
       <button id="btnClear" class="danger small">Очистить всё</button>
+    </div>
+    <div class="row">
+      <button id="btnExportNeuset" class="small">&#128190; Сохранить проект (.neuset)</button>
+      <button id="btnImportNeuset" class="small">&#128193; Открыть проект</button>
+      <span class="hint">.neuset &#8212; файл с датасетом, разметкой и обученной моделью</span>
     </div>
     <div id="gallery" class="gallery"></div>
   </section>
@@ -137,22 +143,28 @@ label b{color:var(--text);}
       <span id="edTitle">Разметка</span>
       <button id="btnEdClose" class="small">&#10005;</button>
     </div>
+    <div class="row">
+      <span class="hint" style="margin:0">Инструмент:</span>
+      <button id="btnModeRect" class="small mode active">&#9646; Рамка</button>
+      <button id="btnModePoly" class="small mode">&#9998; Лассо</button>
+    </div>
     <canvas id="edCanvas"></canvas>
     <div class="row">
       <label style="margin:0">Класс: <select id="edClass"></select></label>
-      <button id="btnEdDeleteBox" class="danger small" disabled>Удалить рамку</button>
+      <button id="btnEdDeleteBox" class="danger small" disabled>Удалить объект</button>
     </div>
     <div class="row">
       <button id="btnEdSave" class="primary">Сохранить</button>
       <button id="btnEdDelImg" class="danger">Удалить фото</button>
     </div>
-    <p class="hint">Проведите пальцем по фото &#8212; появится рамка с текущим классом. Тап по рамке выделяет её: можно тянуть за углы, менять класс или удалить.</p>
+    <p class="hint">Рамка: проведите по фото &#8212; появится прямоугольная рамка. Лассо: обведите объект произвольной формой. Тап по объекту выделяет его: можно двигать, тянуть за углы, за вершины лассо, менять класс или удалить.</p>
   </div>
 </div>
 
 <div id="toast"></div>
 <input type="file" id="fileInput" accept="image/*" multiple hidden>
 <input type="file" id="modelInput" accept=".json,.bin" multiple hidden>
+<input type="file" id="neusetInput" accept=".neuset,.json" hidden>
 
 <script>
 
@@ -177,9 +189,8 @@ var camRunning = false;
 var stream = null;
 var mirror = true;
 var lastInfer = 0;
-var detCount = 0;
 
-var editRec = null, editDrag = null, editSelected = -1, editImg = null, lastCls = 0;
+var editRec = null, editDrag = null, editSelected = -1, editImg = null, lastCls = 0, edMode = 'rect';
 
 var toastTimer = null;
 function toast(msg){
@@ -190,12 +201,77 @@ function toast(msg){
   toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2600);
 }
 
+/* ---------- геометрия ---------- */
+function pointInPoly(x, y, pts){
+  var inside = false;
+  for(var i = 0, j = pts.length - 1; i < pts.length; j = i++){
+    var xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+    if(((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function shapeBBox(s){
+  if(s.kind === 'rect') return {x: s.x, y: s.y, w: s.w, h: s.h};
+  var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
+  for(var k = 0; k < s.pts.length; k++){
+    var p = s.pts[k];
+    if(p[0] < minx) minx = p[0];
+    if(p[0] > maxx) maxx = p[0];
+    if(p[1] < miny) miny = p[1];
+    if(p[1] > maxy) maxy = p[1];
+  }
+  return {x: minx, y: miny, w: maxx - minx, h: maxy - miny};
+}
+function cloneShape(s){
+  var c = {cls: s.cls, kind: s.kind};
+  if(s.kind === 'rect'){ c.x = s.x; c.y = s.y; c.w = s.w; c.h = s.h; }
+  else c.pts = s.pts.map(function(p){ return [p[0], p[1]]; });
+  return c;
+}
+function mirroredShape(s){
+  var m = cloneShape(s);
+  if(m.kind === 'rect'){ m.x = 1 - m.x - m.w; }
+  else m.pts = m.pts.map(function(p){ return [1 - p[0], p[1]]; }).reverse();
+  return m;
+}
+/* Растеризация фигуры в сетку GRID×GRID: вызывает cb(gx, gy, покрытие ячейки 0..1) */
+function rasterizeShape(s, G, cb){
+  if(s.kind === 'rect'){
+    var x0 = clamp(s.x, 0, 1), y0 = clamp(s.y, 0, 1);
+    var x1 = clamp(s.x + s.w, 0, 1), y1 = clamp(s.y + s.h, 0, 1);
+    for(var gy = 0; gy < G; gy++){
+      var cy0 = gy / G, cy1 = (gy + 1) / G;
+      var iy = Math.max(0, Math.min(y1, cy1) - Math.max(y0, cy0));
+      if(iy <= 0) continue;
+      for(var gx = 0; gx < G; gx++){
+        var cx0 = gx / G, cx1 = (gx + 1) / G;
+        var ix = Math.max(0, Math.min(x1, cx1) - Math.max(x0, cx0));
+        if(ix > 0) cb(gx, gy, ix * iy);
+      }
+    }
+    return;
+  }
+  var pts = s.pts, N = 5;
+  for(var gy2 = 0; gy2 < G; gy2++){
+    for(var gx2 = 0; gx2 < G; gx2++){
+      var hits = 0;
+      for(var i = 0; i < N; i++){
+        for(var j = 0; j < N; j++){
+          var px = (gx2 + (i + 0.5) / N) / G, py = (gy2 + (j + 0.5) / N) / G;
+          if(pointInPoly(px, py, pts)) hits++;
+        }
+      }
+      if(hits) cb(gx2, gy2, hits / (N * N));
+    }
+  }
+}
+
 /* ---------- хранилище (IndexedDB) ---------- */
 var dbPromise = null;
 function openDB(){
   if(dbPromise) return dbPromise;
   dbPromise = new Promise(function(resolve, reject){
-    var req = indexedDB.open('neuro-detector', 1);
+    var req = indexedDB.open('neuset', 1);
     req.onupgradeneeded = function(e){
       var db = e.target.result;
       if(!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
@@ -231,6 +307,17 @@ function saveState(){
     idbSet('state', {classes: classes, images: images}).catch(function(e){ console.warn('save', e); });
   }, 300);
 }
+/* Старые разметки (только x,y,w,h) превращаем в фигуры */
+function migrateShapes(){
+  images.forEach(function(im){
+    (im.boxes || []).forEach(function(s){
+      if(!s.kind){
+        s.kind = 'rect';
+        s.pts = [[s.x, s.y], [s.x + s.w, s.y], [s.x + s.w, s.y + s.h], [s.x, s.y + s.h]];
+      }
+    });
+  });
+}
 
 /* ---------- вкладки ---------- */
 document.getElementById('tabs').addEventListener('click', function(e){
@@ -251,7 +338,7 @@ function renderClasses(){
     var cnt = images.reduce(function(n, im){ return n + im.boxes.filter(function(b){ return b.cls === i; }).length; }, 0);
     return '<div class="cls-item"><span class="dot" style="background:' + c.color + '"></span>' +
       '<span class="cls-name">' + esc(c.name) + '</span>' +
-      '<span class="cls-count">' + cnt + ' рамок</span>' +
+      '<span class="cls-count">' + cnt + ' объектов</span>' +
       '<button data-del-cls="' + i + '" class="danger small">&#10005;</button></div>';
   }).join('');
 }
@@ -312,6 +399,14 @@ function readAsDataURL(file){
     r.readAsDataURL(file);
   });
 }
+function readAsText(file){
+  return new Promise(function(resolve, reject){
+    var r = new FileReader();
+    r.onload = function(){ resolve(r.result); };
+    r.onerror = function(){ reject(r.error || new Error('read error')); };
+    r.readAsText(file);
+  });
+}
 function loadImage(src){
   return new Promise(function(resolve, reject){
     var img = new Image();
@@ -360,14 +455,14 @@ function addImages(files){
 
 /* ---------- галерея ---------- */
 function updateStats(){
-  var annotated = 0, boxes = 0;
-  images.forEach(function(im){ if(im.boxes.length) annotated++; boxes += im.boxes.length; });
-  $('#datasetStats').textContent = images.length + ' фото · ' + annotated + ' размечено · ' + boxes + ' рамок';
+  var annotated = 0, shapes = 0;
+  images.forEach(function(im){ if(im.boxes.length) annotated++; shapes += im.boxes.length; });
+  $('#datasetStats').textContent = images.length + ' фото · ' + annotated + ' размечено · ' + shapes + ' объектов';
 }
 function renderGallery(){
   var g = $('#gallery');
   if(!images.length){
-    g.innerHTML = '<p class="hint" style="grid-column:1/-1">Пусто. Загрузите фото и разметьте их &#8212; тап по фото открывает редактор рамок.</p>';
+    g.innerHTML = '<p class="hint" style="grid-column:1/-1">Пусто. Загрузите фото и разметьте их &#8212; тап по фото открывает редактор.</p>';
     updateStats();
     return;
   }
@@ -398,15 +493,126 @@ $('#btnClear').addEventListener('click', function(){
   $('#modelStatus').textContent = 'Модель сброшена';
 });
 
+/* ---------- проект .neuset ---------- */
+function abToB64(buf){
+  var bytes = new Uint8Array(buf);
+  var bin = '';
+  var chunk = 0x8000;
+  for(var i = 0; i < bytes.length; i += chunk){
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+function b64ToAb(b64){
+  var bin = atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for(var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+function pad2(n){ return (n < 10 ? '0' : '') + n; }
+$('#btnExportNeuset').addEventListener('click', function(){
+  if(!images.length && !classes.length){ toast('Нечего сохранять — проект пуст'); return; }
+  var proj = {
+    app: 'Neuset',
+    version: 2,
+    savedAt: new Date().toISOString(),
+    classes: classes,
+    images: images,
+    loss: lossHistory
+  };
+  function doDownload(){
+    try{
+      var blob = new Blob([JSON.stringify(proj)], {type: 'application/octet-stream'});
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      var d = new Date();
+      a.download = 'neuset-' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '.neuset';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+      toast('Проект сохранён в файл .neuset');
+    }catch(e){
+      toast('Не удалось сохранить файл');
+    }
+  }
+  if(model && typeof tf !== 'undefined'){
+    toast('Упаковываю модель…');
+    model.save(tf.io.withSaveHandler(function(artifacts){
+      proj.model = {
+        topology: artifacts.modelTopology,
+        weightSpecs: artifacts.weightSpecs,
+        weights: abToB64(artifacts.weightData)
+      };
+      return {modelArtifactsInfo: {dateSaved: new Date(), modelTopologyType: 'JSON'}};
+    })).then(doDownload).catch(function(){
+      console.warn('model pack', e);
+      toast('Модель не удалось упаковать — сохраняю проект без неё');
+      doDownload();
+    });
+  } else {
+    doDownload();
+  }
+});
+var neusetInput = $('#neusetInput');
+$('#btnImportNeuset').addEventListener('click', function(){ neusetInput.click(); });
+neusetInput.addEventListener('change', function(){
+  var f = (neusetInput.files || [])[0];
+  neusetInput.value = '';
+  if(!f) return;
+  readAsText(f).then(function(text){
+    loadNeuset(text);
+  }).catch(function(){ toast('Не удалось прочитать файл'); });
+});
+function loadNeuset(text){
+  var proj;
+  try{ proj = JSON.parse(text); }catch(e){ toast('Файл повреждён — это не Neuset-проект'); return; }
+  if(!proj || proj.app !== 'Neuset' || !Array.isArray(proj.images)){ toast('Это не файл Neuset'); return; }
+  if(!confirm('Заменить текущий проект (датасет, классы и модель)?')) return;
+  classes = (proj.classes || []).filter(function(c){ return c && c.name; }).slice(0, 8);
+  images = proj.images.filter(function(im){ return im && im.dataUrl; }).map(function(im, i){
+    return {id: im.id || uid(), name: im.name || 'фото ' + (i + 1), dataUrl: im.dataUrl, boxes: im.boxes || []};
+  });
+  lossHistory = Array.isArray(proj.loss) ? proj.loss : [];
+  model = null;
+  $('#modelStatus').textContent = '';
+  drawLossChart();
+  if(proj.model && typeof tf !== 'undefined'){
+    try{
+      tf.loadLayersModel(tf.io.fromMemory({
+        modelTopology: proj.model.topology,
+        weightSpecs: proj.model.weightSpecs,
+        weightData: b64ToAb(proj.model.weights)
+      })).then(function(m){
+        model = m;
+        var outCh = model.outputs[0].shape[3];
+        $('#modelStatus').textContent = (outCh === classes.length)
+          ? 'Модель из проекта загружена (' + outCh + ' кл.)'
+          : 'Модель из проекта на ' + outCh + ' кл., а классов ' + classes.length + ' — переобучите';
+      }).catch(function(err){ console.warn('load model', err); });
+    }catch(e){ console.warn('load model', e); }
+  }
+  saveState();
+  renderClasses(); renderClassSelects(); renderGallery();
+  toast('Проект загружен: ' + images.length + ' фото, ' + classes.length + ' классов');
+}
+
 /* ---------- редактор разметки ---------- */
 var edCanvas = $('#edCanvas');
 var edCtx = edCanvas.getContext('2d');
+
+function setEdMode(m){
+  edMode = m;
+  $('#btnModeRect').classList.toggle('active', m === 'rect');
+  $('#btnModePoly').classList.toggle('active', m === 'poly');
+}
+$('#btnModeRect').addEventListener('click', function(){ setEdMode('rect'); });
+$('#btnModePoly').addEventListener('click', function(){ setEdMode('poly'); });
 
 function openEditor(id){
   var rec = null;
   for(var k = 0; k < images.length; k++) if(images[k].id === id){ rec = images[k]; break; }
   if(!rec) return;
-  editRec = {rec: rec, boxes: rec.boxes.map(function(b){ return {cls: b.cls, x: b.x, y: b.y, w: b.w, h: b.h}; })};
+  editRec = {rec: rec, boxes: rec.boxes.map(cloneShape)};
   editSelected = -1;
   editDrag = null;
   $('#btnEdDeleteBox').disabled = true;
@@ -428,6 +634,14 @@ function closeEditor(){
   $('#editorOverlay').classList.add('hidden');
   editRec = null; editImg = null; editDrag = null; editSelected = -1;
 }
+function polyPath(ctx, pts, W, H){
+  ctx.beginPath();
+  for(var i = 0; i < pts.length; i++){
+    if(i) ctx.lineTo(pts[i][0] * W, pts[i][1] * H);
+    else ctx.moveTo(pts[i][0] * W, pts[i][1] * H);
+  }
+  ctx.closePath();
+}
 function drawEditor(){
   if(!editImg || !editRec) return;
   var W = edCanvas.width, H = edCanvas.height;
@@ -435,15 +649,29 @@ function drawEditor(){
   edCtx.drawImage(editImg, 0, 0, W, H);
   editRec.boxes.forEach(function(b, i){
     var cls = classes[b.cls] || {color: '#ffffff', name: '?'};
-    var x = b.x * W, y = b.y * H, w = b.w * W, h = b.h * H;
+    var bb = shapeBBox(b);
+    var x = bb.x * W, y = bb.y * H, w = bb.w * W, h = bb.h * H;
+    edCtx.save();
+    edCtx.globalAlpha = 0.18;
+    edCtx.fillStyle = cls.color;
+    if(b.kind === 'rect') edCtx.fillRect(x, y, w, h);
+    else { polyPath(edCtx, b.pts, W, H); edCtx.fill(); }
+    edCtx.restore();
     edCtx.lineWidth = (i === editSelected) ? 4 : 2.5;
     edCtx.strokeStyle = cls.color;
-    edCtx.strokeRect(x, y, w, h);
+    if(b.kind === 'rect') edCtx.strokeRect(x, y, w, h);
+    else { polyPath(edCtx, b.pts, W, H); edCtx.stroke(); }
     if(i === editSelected){
       edCtx.fillStyle = cls.color;
-      [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(function(p){
-        edCtx.beginPath(); edCtx.arc(p[0], p[1], 7, 0, Math.PI * 2); edCtx.fill();
+      [[bb.x, bb.y], [bb.x + bb.w, bb.y], [bb.x, bb.y + bb.h], [bb.x + bb.w, bb.y + bb.h]].forEach(function(p){
+        edCtx.beginPath(); edCtx.arc(p[0] * W, p[1] * H, 7, 0, Math.PI * 2); edCtx.fill();
       });
+      if(b.kind === 'poly'){
+        edCtx.fillStyle = '#10151d';
+        b.pts.forEach(function(p){
+          edCtx.beginPath(); edCtx.arc(p[0] * W, p[1] * H, 4.5, 0, Math.PI * 2); edCtx.fill();
+        });
+      }
     }
     edCtx.font = 'bold 14px system-ui, sans-serif';
     var tw = edCtx.measureText(cls.name).width;
@@ -453,6 +681,27 @@ function drawEditor(){
     edCtx.fillStyle = '#10151d';
     edCtx.fillText(cls.name, x + 5, ly + 15);
   });
+  if(editDrag){
+    var dcls = classes[+$('#edClass').value] || {color: '#ffffff'};
+    edCtx.save();
+    edCtx.strokeStyle = dcls.color;
+    edCtx.fillStyle = dcls.color;
+    edCtx.globalAlpha = 0.18;
+    edCtx.lineWidth = 2.5;
+    edCtx.setLineDash([6, 4]);
+    if(editDrag.mode === 'new'){
+      var a = editDrag.start, c = editDrag.cur;
+      edCtx.fillRect(Math.min(a.x, c.x) * W, Math.min(a.y, c.y) * H, Math.abs(c.x - a.x) * W, Math.abs(c.y - a.y) * H);
+      edCtx.globalAlpha = 1;
+      edCtx.strokeRect(Math.min(a.x, c.x) * W, Math.min(a.y, c.y) * H, Math.abs(c.x - a.x) * W, Math.abs(c.y - a.y) * H);
+    } else if(editDrag.mode === 'lasso' && editDrag.pts.length){
+      polyPath(edCtx, editDrag.pts, W, H);
+      edCtx.fill();
+      edCtx.globalAlpha = 1;
+      edCtx.stroke();
+    }
+    edCtx.restore();
+  }
 }
 function edPos(e){
   var r = edCanvas.getBoundingClientRect();
@@ -461,18 +710,28 @@ function edPos(e){
     y: clamp((e.clientY - r.top) / r.height, 0, 1)
   };
 }
-function hitBox(p){
+function hitShape(p){
   for(var i = editRec.boxes.length - 1; i >= 0; i--){
-    var b = editRec.boxes[i], tol = 0.03;
-    if(p.x >= b.x - tol && p.x <= b.x + b.w + tol && p.y >= b.y - tol && p.y <= b.y + b.h + tol) return i;
+    var s = editRec.boxes[i], tol = 0.02;
+    if(s.kind === 'rect'){
+      if(p.x >= s.x - tol && p.x <= s.x + s.w + tol && p.y >= s.y - tol && p.y <= s.y + s.h + tol) return i;
+    } else if(pointInPoly(p.x, p.y, s.pts)) return i;
   }
   return -1;
 }
-function cornerHit(p, b){
+function cornerHit(p, bb){
   var tol = 0.05;
-  var corners = [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]];
+  var corners = [[bb.x, bb.y], [bb.x + bb.w, bb.y], [bb.x, bb.y + bb.h], [bb.x + bb.w, bb.y + bb.h]];
   for(var k = 0; k < 4; k++){
     if(Math.abs(p.x - corners[k][0]) < tol && Math.abs(p.y - corners[k][1]) < tol) return k;
+  }
+  return -1;
+}
+function vertexHit(p, s){
+  if(s.kind !== 'poly') return -1;
+  var tol = 0.035;
+  for(var i = 0; i < s.pts.length; i++){
+    if(Math.abs(p.x - s.pts[i][0]) < tol && Math.abs(p.y - s.pts[i][1]) < tol) return i;
   }
   return -1;
 }
@@ -481,20 +740,24 @@ edCanvas.addEventListener('pointerdown', function(e){
   try{ edCanvas.setPointerCapture(e.pointerId); } catch(err){}
   var p = edPos(e);
   if(editSelected >= 0){
-    var corner = cornerHit(p, editRec.boxes[editSelected]);
-    if(corner >= 0){ editDrag = {mode: 'resize', corner: corner, start: p, orig: Object.assign({}, editRec.boxes[editSelected])}; return; }
+    var sel = editRec.boxes[editSelected];
+    var bb = shapeBBox(sel);
+    var corner = cornerHit(p, bb);
+    if(corner >= 0){ editDrag = {mode: 'resize', corner: corner, start: p, orig: cloneShape(sel), bbox: bb}; return; }
+    var v = vertexHit(p, sel);
+    if(v >= 0){ editDrag = {mode: 'vertex', v: v, start: p, orig: cloneShape(sel)}; return; }
   }
-  var hit = hitBox(p);
+  var hit = hitShape(p);
   if(hit >= 0){
     editSelected = hit;
     $('#btnEdDeleteBox').disabled = false;
-    editDrag = {mode: 'move', start: p, orig: Object.assign({}, editRec.boxes[hit])};
+    editDrag = {mode: 'move', start: p, orig: cloneShape(editRec.boxes[hit])};
     drawEditor();
     return;
   }
   editSelected = -1;
   $('#btnEdDeleteBox').disabled = true;
-  editDrag = {mode: 'new', start: p, cur: p};
+  editDrag = (edMode === 'rect') ? {mode: 'new', start: p, cur: p} : {mode: 'lasso', pts: [p]};
   drawEditor();
 });
 edCanvas.addEventListener('pointermove', function(e){
@@ -504,34 +767,53 @@ edCanvas.addEventListener('pointermove', function(e){
   if(editDrag.mode === 'new'){
     editDrag.cur = p;
     drawEditor();
-    var a = editDrag.start, c = editDrag.cur;
-    var cls = classes[+$('#edClass').value] || {color: '#ffffff'};
-    edCtx.strokeStyle = cls.color; edCtx.lineWidth = 2.5;
-    edCtx.setLineDash([6, 4]);
-    edCtx.strokeRect(Math.min(a.x, c.x) * edCanvas.width, Math.min(a.y, c.y) * edCanvas.height,
-      Math.abs(c.x - a.x) * edCanvas.width, Math.abs(c.y - a.y) * edCanvas.height);
-    edCtx.setLineDash([]);
+    return;
+  }
+  if(editDrag.mode === 'lasso'){
+    var last = editDrag.pts[editDrag.pts.length - 1];
+    if(!last || Math.hypot(p.x - last[0], p.y - last[1]) > 0.008){
+      editDrag.pts.push([p.x, p.y]);
+      drawEditor();
+    }
     return;
   }
   var b = editRec.boxes[editSelected];
   if(!b) return;
   if(editDrag.mode === 'move'){
-    b.x = clamp(editDrag.orig.x + p.x - editDrag.start.x, 0, 1 - editDrag.orig.w);
-    b.y = clamp(editDrag.orig.y + p.y - editDrag.start.y, 0, 1 - editDrag.orig.h);
+    var dx = p.x - editDrag.start.x, dy = p.y - editDrag.start.y;
+    if(b.kind === 'rect'){
+      b.x = clamp(editDrag.orig.x + dx, 0, 1 - editDrag.orig.w);
+      b.y = clamp(editDrag.orig.y + dy, 0, 1 - editDrag.orig.h);
+    } else {
+      b.pts = editDrag.orig.pts.map(function(pt){
+        return [clamp(pt[0] + dx, 0, 1), clamp(pt[1] + dy, 0, 1)];
+      });
+    }
+  } else if(editDrag.mode === 'vertex'){
+    b.pts[editDrag.v] = [p.x, p.y];
   } else {
-    var o = editDrag.orig, corner = editDrag.corner;
-    var x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
+    var o = editDrag.orig, ob = editDrag.bbox, corner = editDrag.corner;
+    var x1 = ob.x, y1 = ob.y, x2 = ob.x + ob.w, y2 = ob.y + ob.h;
     if(corner === 0){ x1 = p.x; y1 = p.y; }
     if(corner === 1){ x2 = p.x; y1 = p.y; }
     if(corner === 2){ x1 = p.x; y2 = p.y; }
     if(corner === 3){ x2 = p.x; y2 = p.y; }
-    b.x = Math.min(x1, x2); b.y = Math.min(y1, y2);
-    b.w = Math.abs(x2 - x1); b.h = Math.abs(y2 - y1);
+    var nx1 = Math.min(x1, x2), ny1 = Math.min(y1, y2);
+    var nw = Math.abs(x2 - x1), nh = Math.abs(y2 - y1);
+    if(o.kind === 'rect'){
+      b.x = clamp(nx1, 0, 1); b.y = clamp(ny1, 0, 1);
+      b.w = clamp(nw, 0, 1 - b.x); b.h = clamp(nh, 0, 1 - b.y);
+    } else if(ob.w > 0.001 && ob.h > 0.001){
+      var sx = nw / ob.w, sy = nh / ob.h;
+      b.pts = o.pts.map(function(pt){
+        return [nx1 + (pt[0] - ob.x) * sx, ny1 + (pt[1] - ob.y) * sy];
+      });
+    }
   }
   drawEditor();
 });
 function endDrag(){
-  if(!editRec || !editDrag) { editDrag = null; return; }
+  if(!editRec || !editDrag){ editDrag = null; return; }
   if(editDrag.mode === 'new' && editDrag.cur){
     var a = editDrag.start, c = editDrag.cur;
     var x = Math.min(a.x, c.x), y = Math.min(a.y, c.y);
@@ -541,9 +823,27 @@ function endDrag(){
         toast('Сначала создайте класс во вкладке «Классы»');
       } else {
         lastCls = +$('#edClass').value || 0;
-        editRec.boxes.push({cls: lastCls, x: x, y: y, w: w, h: h});
+        editRec.boxes.push({cls: lastCls, kind: 'rect', x: x, y: y, w: w, h: h,
+          pts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]});
         editSelected = editRec.boxes.length - 1;
         $('#btnEdDeleteBox').disabled = false;
+      }
+    }
+  } else if(editDrag.mode === 'lasso'){
+    var pts = editDrag.pts;
+    if(pts.length >= 3){
+      var bb = shapeBBox({kind: 'poly', pts: pts});
+      if(bb.w > 0.02 && bb.h > 0.02){
+        if(!classes.length){
+          toast('Сначала создайте класс во вкладке «Классы»');
+        } else {
+          lastCls = +$('#edClass').value || 0;
+          editRec.boxes.push({cls: lastCls, kind: 'poly', pts: pts});
+          editSelected = editRec.boxes.length - 1;
+          $('#btnEdDeleteBox').disabled = false;
+        }
+      } else {
+        toast('Обведите объект пошире');
       }
     }
   }
@@ -582,7 +882,7 @@ $('#editorOverlay').addEventListener('click', function(e){
   if(e.target === $('#editorOverlay')) closeEditor();
 });
 
-/* ---------- модель ---------- */
+/* ---------- модель: маска покрытия по ячейкам ---------- */
 function buildModel(numClasses){
   var m = tf.sequential();
   m.add(tf.layers.conv2d({inputShape: [INPUT, INPUT, 3], filters: 16, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
@@ -590,52 +890,32 @@ function buildModel(numClasses){
   m.add(tf.layers.conv2d({filters: 64, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
   m.add(tf.layers.conv2d({filters: 128, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
   m.add(tf.layers.conv2d({filters: 128, kernelSize: 3, padding: 'same', activation: 'relu'}));
-  m.add(tf.layers.conv2d({filters: numClasses + 5, kernelSize: 1, padding: 'same'}));
+  m.add(tf.layers.conv2d({filters: numClasses, kernelSize: 1, padding: 'same'}));
   return m;
 }
-function detectorLoss(pred, tObj, tBox, tCls){
+function detectorLoss(pred, tMask){
   return tf.tidy(function(){
     var eps = 1e-7;
-    var pObj = pred.slice([0, 0, 0, 0], [-1, -1, -1, 1]).sigmoid();
-    var pXY = pred.slice([0, 0, 0, 1], [-1, -1, -1, 2]).sigmoid();
-    var pWH = pred.slice([0, 0, 0, 3], [-1, -1, -1, 2]).sigmoid();
-    var gxGrid = tf.range(0, GRID, 1, 'float32').reshape([1, 1, GRID, 1]);
-    var gyGrid = tf.range(0, GRID, 1, 'float32').reshape([1, GRID, 1, 1]);
-    var cellXY = tf.concat([gxGrid, gyGrid], 3);
-    var pXYabs = pXY.add(cellXY).div(GRID);
-    var pBox = tf.concat([pXYabs, pWH], 3);
-    var boxLoss = pBox.sub(tBox).square().mul(tObj).sum().div(tObj.sum().add(1e-6));
-    var wObj = tObj.mul(10).add(tf.scalar(1).sub(tObj));
-    var bce = tObj.mul(pObj.add(eps).log().neg())
-      .add(tf.scalar(1).sub(tObj).mul(pObj.neg().add(1).add(eps).log().neg()));
-    var objLoss = bce.mul(wObj).sum().div(wObj.sum());
-    var C = pred.shape[3] - 5;
-    var pCls = pred.slice([0, 0, 0, 5], [-1, -1, -1, C]).softmax();
-    var clsLoss = tCls.mul(pCls.add(eps).log().neg()).sum(3).mul(tObj).sum().div(tObj.sum().add(1e-6));
-    return boxLoss.mul(3).add(objLoss).add(clsLoss);
+    var p = pred.sigmoid(); /* [B, GRID, GRID, C] */
+    var bce = tMask.mul(p.add(eps).log().neg())
+      .add(tf.scalar(1).sub(tMask).mul(p.neg().add(1).add(eps).log().neg()));
+    var w = tMask.mul(10).add(tf.scalar(1).sub(tMask));
+    return bce.mul(w).sum().div(w.sum());
   });
 }
-function buildBatchTargets(boxLists, numCls){
-  var B = boxLists.length;
-  var obj = new Float32Array(B * GRID * GRID);
-  var box = new Float32Array(B * GRID * GRID * 4);
-  var cls = new Float32Array(B * GRID * GRID * numCls);
-  boxLists.forEach(function(boxes, b){
-    boxes.forEach(function(bx){
-      var gx = clamp(Math.floor(bx.x * GRID), 0, GRID - 1);
-      var gy = clamp(Math.floor(bx.y * GRID), 0, GRID - 1);
-      var cell = b * GRID * GRID + gy * GRID + gx;
-      obj[cell] = 1;
-      box[cell * 4] = bx.x; box[cell * 4 + 1] = bx.y; box[cell * 4 + 2] = bx.w; box[cell * 4 + 3] = bx.h;
-      var ci = clamp(bx.cls | 0, 0, numCls - 1);
-      cls[cell * numCls + ci] = 1;
+function buildBatchTargets(shapeLists, numCls){
+  var B = shapeLists.length;
+  var mask = new Float32Array(B * GRID * GRID * numCls);
+  shapeLists.forEach(function(shapes, b){
+    shapes.forEach(function(s){
+      var ci = clamp(s.cls | 0, 0, numCls - 1);
+      rasterizeShape(s, GRID, function(gx, gy, cov){
+        var idx = (b * GRID * GRID + gy * GRID + gx) * numCls + ci;
+        if(cov > mask[idx]) mask[idx] = cov;
+      });
     });
   });
-  return {
-    obj: tf.tensor4d(obj, [B, GRID, GRID, 1]),
-    box: tf.tensor4d(box, [B, GRID, GRID, 4]),
-    cls: tf.tensor4d(cls, [B, GRID, GRID, numCls])
-  };
+  return tf.tensor4d(mask, [B, GRID, GRID, numCls]);
 }
 function shuffle(arr){
   for(var i = arr.length - 1; i > 0; i--){
@@ -702,7 +982,7 @@ function startTraining(){
       var c = document.createElement('canvas');
       c.width = INPUT; c.height = INPUT;
       c.getContext('2d').drawImage(img, 0, 0, INPUT, INPUT);
-      prepared.push({canvas: c, boxes: rec.boxes.map(function(b){ return {cls: b.cls, x: b.x, y: b.y, w: b.w, h: b.h}; })});
+      prepared.push({canvas: c, shapes: rec.boxes.map(cloneShape)});
     }).catch(function(){});
   });
   Promise.all(loadAll).then(function(){
@@ -723,20 +1003,18 @@ function startTraining(){
           return;
         }
         var part = idx.slice(i, i + batchSize);
-        var xsList = [], boxLists = [];
+        var xsList = [], shapeLists = [];
         part.forEach(function(j){
           var flip = augment && Math.random() < 0.5;
           xsList.push(drawAug(prepared[j].canvas, flip));
-          boxLists.push(prepared[j].boxes.map(function(b){
-            return flip ? {cls: b.cls, x: 1 - b.x, y: b.y, w: b.w, h: b.h} : {cls: b.cls, x: b.x, y: b.y, w: b.w, h: b.h};
-          }));
+          shapeLists.push(flip ? prepared[j].shapes.map(mirroredShape) : prepared[j].shapes.map(cloneShape));
         });
         var xs = tf.stack(xsList.map(function(c){ return tf.browser.fromPixels(c).toFloat().div(255); }));
-        var t = buildBatchTargets(boxLists, numCls);
+        var tMask = buildBatchTargets(shapeLists, numCls);
         var lossVal = 0;
         var minPromise = optimizer.minimize(function(){
           var pred = model.predict(xs);
-          return detectorLoss(pred, t.obj, t.box, t.cls);
+          return detectorLoss(pred, tMask);
         }, true);
         minPromise.then(function(l){
           lossVal = l.dataSync()[0];
@@ -746,7 +1024,7 @@ function startTraining(){
           toast('Ошибка обучения: ' + err.message);
           training = false;
         }).then(function(){
-          xs.dispose(); t.obj.dispose(); t.box.dispose(); t.cls.dispose();
+          xs.dispose(); tMask.dispose();
           if(training){
             sum += lossVal; cnt++;
             $('#trainProgress').textContent = 'Эпоха ' + ep + '/' + epochs + ' · батч ' + Math.min(i + batchSize, idx.length) + '/' + idx.length + ' · loss ' + lossVal.toFixed(4);
@@ -774,8 +1052,8 @@ $('#btnTrain').addEventListener('click', startTraining);
 $('#btnStopTrain').addEventListener('click', function(){ training = false; });
 $('#btnSaveModel').addEventListener('click', function(){
   if(!model){ toast('Сначала обучите модель'); return; }
-  model.save('downloads://neuro-detector-model').then(function(){
-    toast('Модель скачана: neuro-detector-model.json и .bin');
+  model.save('downloads://neuset-model').then(function(){
+    toast('Модель скачана: neuset-model.json и .bin');
   }).catch(function(){ toast('Не удалось сохранить модель'); });
 });
 var modelInput = $('#modelInput');
@@ -792,7 +1070,7 @@ modelInput.addEventListener('change', function(){
   var list = bin ? [json, bin] : [json];
   tf.loadLayersModel(tf.io.browserFiles(list)).then(function(m){
     model = m;
-    var outCh = model.outputs[0].shape[3] - 5;
+    var outCh = model.outputs[0].shape[3];
     $('#modelStatus').textContent = outCh === classes.length
       ? 'Модель загружена (' + outCh + ' классов)'
       : 'Загружена модель на ' + outCh + ' кл., а сейчас классов ' + classes.length + ' — переобучите';
@@ -870,56 +1148,59 @@ function minField(){ return +$('#inpField').value / 100; }
 function runDetection(){
   if(!model || video.readyState < 2) return;
   procCtx.drawImage(video, 0, 0, INPUT, INPUT);
-  var dets = tf.tidy(function(){
+  var comps = tf.tidy(function(){
     var input = tf.browser.fromPixels(procCanvas).toFloat().div(255).expandDims(0);
     var pred = model.predict(input);
-    return decodePred(pred.dataSync(), thr());
+    return decodeMasks(pred.dataSync(), thr());
   });
-  drawOverlay(dets);
-  $('#camStatus').textContent = 'Объектов в кадре: ' + dets.length + ' · порог ' + $('#inpThr').value + '% · мин. поле ' + $('#inpField').value + '%';
+  drawOverlay(comps);
 }
-function decodePred(data, thrVal){
-  var Ct = model.outputs[0].shape[3];
-  var numCls = Ct - 5;
-  var out = [];
-  if(numCls <= 0) return out;
-  for(var gy = 0; gy < GRID; gy++){
-    for(var gx = 0; gx < GRID; gx++){
-      var off = (gy * GRID + gx) * Ct;
-      var obj = sigmoid(data[off]);
-      if(obj < 0.02) continue;
-      var bestC = 0, bestP = -1;
-      for(var c = 0; c < numCls; c++){
-        var p = sigmoid(data[off + 5 + c]);
-        if(p > bestP){ bestP = p; bestC = c; }
-      }
-      var conf = obj * bestP;
-      if(conf < thrVal) continue;
-      var sx = sigmoid(data[off + 1]), sy = sigmoid(data[off + 2]);
-      var w = sigmoid(data[off + 3]), h = sigmoid(data[off + 4]);
-      out.push({x: (gx + sx) / GRID - w / 2, y: (gy + sy) / GRID - h / 2, w: w, h: h, conf: conf, cls: bestC});
+function decodeMasks(data, thrVal){
+  var C = model.outputs[0].shape[3];
+  var G = GRID;
+  if(C <= 0) return [];
+  var probs = new Float32Array(G * G);
+  var clsOf = new Int16Array(G * G);
+  clsOf.fill(-1);
+  for(var i = 0; i < G * G; i++){
+    var bestC = -1, bestP = -1;
+    for(var c = 0; c < C; c++){
+      var p = sigmoid(data[i * C + c]);
+      if(p > bestP){ bestP = p; bestC = c; }
     }
+    if(bestP >= thrVal){ probs[i] = bestP; clsOf[i] = bestC; }
   }
-  return nms(out, 0.4);
+  var seen = new Uint8Array(G * G);
+  var stack = [], comps = [];
+  for(var s0 = 0; s0 < G * G; s0++){
+    if(clsOf[s0] < 0 || seen[s0]) continue;
+    var cls = clsOf[s0];
+    var cells = [], sum = 0;
+    stack.length = 0; stack.push(s0); seen[s0] = 1;
+    while(stack.length){
+      var idx = stack.pop();
+      cells.push(idx); sum += probs[idx];
+      var gx = idx % G, gy = (idx - gx) / G;
+      if(gx > 0 && !seen[idx - 1] && clsOf[idx - 1] === cls){ seen[idx - 1] = 1; stack.push(idx - 1); }
+      if(gx < G - 1 && !seen[idx + 1] && clsOf[idx + 1] === cls){ seen[idx + 1] = 1; stack.push(idx + 1); }
+      if(gy > 0 && !seen[idx - G] && clsOf[idx - G] === cls){ seen[idx - G] = 1; stack.push(idx - G); }
+      if(gy < G - 1 && !seen[idx + G] && clsOf[idx + G] === cls){ seen[idx + G] = 1; stack.push(idx + G); }
+    }
+    var minx = G, maxx = -1, miny = G, maxy = -1;
+    for(var k = 0; k < cells.length; k++){
+      var cx = cells[k] % G, cy = (cells[k] - cx) / G;
+      if(cx < minx) minx = cx;
+      if(cx > maxx) maxx = cx;
+      if(cy < miny) miny = cy;
+      if(cy > maxy) maxy = cy;
+    }
+    comps.push({cls: cls, x: minx / G, y: miny / G, w: (maxx - minx + 1) / G, h: (maxy - miny + 1) / G,
+      conf: sum / cells.length, cells: cells});
+  }
+  comps.sort(function(a, b){ return b.conf - a.conf; });
+  return comps;
 }
-function iou(a, b){
-  var x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
-  var x2 = Math.min(a.x + a.w, b.x + b.w), y2 = Math.min(a.y + a.h, b.y + b.h);
-  var inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-  var uni = a.w * a.h + b.w * b.h - inter;
-  return uni > 0 ? inter / uni : 0;
-}
-function nms(list, iouThr){
-  list.sort(function(a, b){ return b.conf - a.conf; });
-  var keep = [];
-  list.forEach(function(d){
-    var ok = true;
-    for(var i = 0; i < keep.length; i++) if(iou(keep[i], d) >= iouThr){ ok = false; break; }
-    if(ok) keep.push(d);
-  });
-  return keep;
-}
-function drawOverlay(dets){
+function drawOverlay(comps){
   var W = overlay.width, H = overlay.height;
   octx.clearRect(0, 0, W, H);
   var minSide = minField() * Math.min(W, H);
@@ -930,27 +1211,35 @@ function drawOverlay(dets){
   octx.lineWidth = 2;
   octx.strokeRect(cx - sq / 2, cy - sq / 2, sq, sq);
   octx.restore();
-  dets.forEach(function(d){
-    var bw = d.w * W, bh = d.h * H;
-    if(Math.min(bw, bh) < minSide) return;
-    var cls = classes[d.cls] || {color: '#ffffff', name: '?'};
+  var cw = W / GRID, ch = H / GRID;
+  var allowed = comps.filter(function(c){ return Math.min(c.w * W, c.h * H) >= minSide; });
+  allowed.forEach(function(c){
+    var cls = classes[c.cls] || {color: '#ffffff', name: '?'};
     var color = cls.color;
     octx.save();
     if(mirror) octx.setTransform(-1, 0, 0, 1, W, 0);
+    octx.fillStyle = color;
+    octx.globalAlpha = 0.18 + 0.27 * Math.min(1, c.conf);
+    for(var k = 0; k < c.cells.length; k++){
+      var idx = c.cells[k], gx = idx % GRID, gy = (idx - gx) / GRID;
+      octx.fillRect(gx * cw, gy * ch, cw, ch);
+    }
+    octx.globalAlpha = 1;
     octx.strokeStyle = color;
     octx.lineWidth = Math.max(2, H / 200);
-    octx.strokeRect(d.x * W, d.y * H, bw, bh);
+    octx.strokeRect(c.x * W, c.y * H, c.w * W, c.h * H);
     octx.restore();
-    var lx = mirror ? W - (d.x * W + bw) : d.x * W;
-    var label = cls.name + ' ' + Math.round(d.conf * 100) + '%';
+    var lx = mirror ? W - (c.x * W + c.w * W) : c.x * W;
+    var label = cls.name + ' ' + Math.round(c.conf * 100) + '%';
     octx.font = 'bold ' + Math.max(12, Math.round(H / 30)) + 'px system-ui, sans-serif';
     var tw = octx.measureText(label).width;
-    var ly = Math.max(22, d.y * H);
+    var ly = Math.max(22, c.y * H);
     octx.fillStyle = color;
     octx.fillRect(lx, ly - 22, tw + 10, 22);
     octx.fillStyle = '#10151d';
     octx.fillText(label, lx + 5, ly - 6);
   });
+  $('#camStatus').textContent = 'Объектов в кадре: ' + allowed.length + ' · порог ' + $('#inpThr').value + '% · мин. поле ' + $('#inpField').value + '%';
 }
 
 /* ---------- старт ---------- */
@@ -962,6 +1251,7 @@ function drawOverlay(dets){
     }
   }).catch(function(){})
   .then(function(){
+    migrateShapes();
     renderClasses(); renderClassSelects(); renderGallery();
   });
 })();
