@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Neuset</title>
+<title>NeuSet</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <style>
 :root{ --bg:#0d1117; --card:#161c26; --line:#2a3242; --text:#e8edf4; --muted:#8b95a7; --accent:#4dd0e1; }
@@ -61,7 +61,7 @@ label b{color:var(--text);}
 </head>
 <body>
 <header>
-  <h1>&#129504; Neuset</h1>
+  <h1>&#129504; NeuSet</h1>
   <nav id="tabs">
     <button class="tabbtn active" data-tab="dataset">Датасет</button>
     <button class="tabbtn" data-tab="classes">Классы</button>
@@ -78,11 +78,6 @@ label b{color:var(--text);}
     <div class="row">
       <span id="datasetStats" class="hint">0 фото</span>
       <button id="btnClear" class="danger small">Очистить всё</button>
-    </div>
-    <div class="row">
-      <button id="btnExportNeuset" class="small">&#128190; Сохранить проект (.neuset)</button>
-      <button id="btnImportNeuset" class="small">&#128193; Открыть проект</button>
-      <span class="hint">.neuset &#8212; файл с датасетом, разметкой и обученной моделью</span>
     </div>
     <div id="gallery" class="gallery"></div>
   </section>
@@ -111,10 +106,11 @@ label b{color:var(--text);}
       <div id="trainProgress" class="progress-text">Готово к обучению</div>
       <canvas id="lossChart" width="600" height="160"></canvas>
       <div class="row">
-        <button id="btnSaveModel" class="small">&#128190; Скачать модель</button>
-        <button id="btnLoadModel" class="small">&#128193; Загрузить модель</button>
+        <button id="btnSaveSet" class="small">&#128190; Сохранить .neuset</button>
+        <button id="btnOpenSet" class="small">&#128193; Открыть .neuset</button>
         <span id="modelStatus" class="hint"></span>
       </div>
+      <p class="hint">В файл .neuset упаковывается всё: фото, разметка, классы и обученная модель. Откройте такой файл на любом устройстве &#8212; проект и модель восстановятся целиком.</p>
     </div>
   </section>
 
@@ -154,16 +150,15 @@ label b{color:var(--text);}
       <button id="btnEdDeleteBox" class="danger small" disabled>Удалить объект</button>
     </div>
     <div class="row">
-      <button id="btnEdSave" class="primary">Сохранить</button>
+      <button id="btnEdSave" class="primary">Сохранить и &#8594; следующее фото</button>
       <button id="btnEdDelImg" class="danger">Удалить фото</button>
     </div>
-    <p class="hint">Рамка: проведите по фото &#8212; появится прямоугольная рамка. Лассо: обведите объект произвольной формой. Тап по объекту выделяет его: можно двигать, тянуть за углы, за вершины лассо, менять класс или удалить.</p>
+    <p class="hint">Лассо: ведите пальцем по контуру объекта &#8212; линия следует за курсором, форма замыкается автоматически. Рамка: как раньше. Тап по объекту выделяет его: двигайте, тяните за углы или вершины, меняйте класс. Кнопка «Сохранить» открывает следующее неразмеченное фото.</p>
   </div>
 </div>
 
 <div id="toast"></div>
 <input type="file" id="fileInput" accept="image/*" multiple hidden>
-<input type="file" id="modelInput" accept=".json,.bin" multiple hidden>
 <input type="file" id="neusetInput" accept=".neuset,.json" hidden>
 
 <script>
@@ -234,7 +229,39 @@ function mirroredShape(s){
   else m.pts = m.pts.map(function(p){ return [1 - p[0], p[1]]; }).reverse();
   return m;
 }
-/* Растеризация фигуры в сетку GRID×GRID: вызывает cb(gx, gy, покрытие ячейки 0..1) */
+/* Расстояние от точки до отрезка — для упрощения лассо */
+function distToSeg(p, a, b){
+  var dx = b[0] - a[0], dy = b[1] - a[1];
+  var len2 = dx * dx + dy * dy;
+  if(len2 < 1e-12) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  var t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2, 0, 1);
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+/* Упрощение полигона (Дуглас–Пекер), eps в долях изображения */
+function simplifyPoly(pts, eps){
+  if(pts.length < 4) return pts;
+  var keep = new Array(pts.length);
+  for(var i = 0; i < pts.length; i++) keep[i] = false;
+  keep[0] = keep[pts.length - 1] = true;
+  var stack = [[0, pts.length - 1]];
+  while(stack.length){
+    var seg = stack.pop();
+    var a = pts[seg[0]], b = pts[seg[1]];
+    var maxD = -1, idx = -1;
+    for(var i2 = seg[0] + 1; i2 < seg[1]; i2++){
+      var d = distToSeg(pts[i2], a, b);
+      if(d > maxD){ maxD = d; idx = i2; }
+    }
+    if(maxD > eps && idx > 0){
+      keep[idx] = true;
+      stack.push([seg[0], idx], [idx, seg[1]]);
+    }
+  }
+  var out = [];
+  for(var j = 0; j < pts.length; j++) if(keep[j]) out.push(pts[j]);
+  return out.length >= 3 ? out : pts;
+}
+/* Растеризация фигуры в сетку G×G: вызывает cb(gx, gy, покрытие ячейки 0..1) */
 function rasterizeShape(s, G, cb){
   if(s.kind === 'rect'){
     var x0 = clamp(s.x, 0, 1), y0 = clamp(s.y, 0, 1);
@@ -271,7 +298,7 @@ var dbPromise = null;
 function openDB(){
   if(dbPromise) return dbPromise;
   dbPromise = new Promise(function(resolve, reject){
-    var req = indexedDB.open('neuset', 1);
+    var req = indexedDB.open('neuset-app', 1);
     req.onupgradeneeded = function(e){
       var db = e.target.result;
       if(!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
@@ -317,6 +344,27 @@ function migrateShapes(){
       }
     });
   });
+}
+
+/* ---------- модель: сохранение в браузере ---------- */
+function persistModel(){
+  if(!model) return;
+  model.save(tf.io.withSaveHandler(function(a){
+    return idbSet('model', {topology: a.modelTopology, weightSpecs: a.weightSpecs, weightData: a.weightData})
+      .then(function(){ return {modelArtifactsInfo: {dateSaved: new Date(), modelTopologyType: 'JSON'}}; });
+  })).catch(function(e){ console.warn('persist model', e); });
+}
+function modelFromArtifacts(a){
+  return tf.loadLayersModel(tf.io.fromMemory({
+    modelTopology: a.topology || a.modelTopology,
+    weightSpecs: a.weightSpecs,
+    weightData: a.weightData ? a.weightData : abFromB64(a.weightsB64)
+  }));
+}
+function checkModelAgainstClasses(m){
+  if(!m || !classes.length) return true;
+  var out = m.outputs[0].shape[3];
+  return out === classes.length;
 }
 
 /* ---------- вкладки ---------- */
@@ -399,14 +447,6 @@ function readAsDataURL(file){
     r.readAsDataURL(file);
   });
 }
-function readAsText(file){
-  return new Promise(function(resolve, reject){
-    var r = new FileReader();
-    r.onload = function(){ resolve(r.result); };
-    r.onerror = function(){ reject(r.error || new Error('read error')); };
-    r.readAsText(file);
-  });
-}
 function loadImage(src){
   return new Promise(function(resolve, reject){
     var img = new Image();
@@ -486,115 +526,131 @@ $('#gallery').addEventListener('click', function(e){
   if(th) openEditor(th.getAttribute('data-id'));
 });
 $('#btnClear').addEventListener('click', function(){
-  if(!images.length && !classes.length) return;
-  if(!confirm('Удалить весь датасет и классы?')) return;
+  if(!images.length && !classes.length && !model) return;
+  if(!confirm('Удалить весь датасет, классы и модель?')) return;
   images = []; classes = []; model = null; lossHistory = [];
+  idbSet('model', null).catch(function(){});
   saveState(); renderGallery(); renderClasses(); renderClassSelects(); drawLossChart();
   $('#modelStatus').textContent = 'Модель сброшена';
 });
 
-/* ---------- проект .neuset ---------- */
-function abToB64(buf){
+/* ---------- формат .neuset: base64 для весов ---------- */
+function b64FromAB(buf){
   var bytes = new Uint8Array(buf);
   var bin = '';
   var chunk = 0x8000;
   for(var i = 0; i < bytes.length; i += chunk){
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
   }
   return btoa(bin);
 }
-function b64ToAb(b64){
+function abFromB64(b64){
   var bin = atob(b64);
   var bytes = new Uint8Array(bin.length);
   for(var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes.buffer;
 }
+function downloadBlob(blob, name){
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
 function pad2(n){ return (n < 10 ? '0' : '') + n; }
-$('#btnExportNeuset').addEventListener('click', function(){
-  if(!images.length && !classes.length){ toast('Нечего сохранять — проект пуст'); return; }
-  var proj = {
-    app: 'Neuset',
-    version: 2,
-    savedAt: new Date().toISOString(),
-    classes: classes,
-    images: images,
-    loss: lossHistory
+function neusetFileName(){
+  var d = new Date();
+  return 'neuset-' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + '.neuset';
+}
+
+/* Сохранить весь проект в .neuset */
+$('#btnSaveSet').addEventListener('click', function(){
+  if(typeof tf === 'undefined'){ toast('TensorFlow.js не загрузился'); return; }
+  if(!images.length && !classes.length){ toast('Нечего сохранять &#8212; добавьте фото и классы'); return; }
+  var payload = {
+    format: 'NeuSet',
+    version: 1,
+    created: new Date().toISOString(),
+    classes: JSON.parse(JSON.stringify(classes)),
+    images: JSON.parse(JSON.stringify(images)),
+    model: null
   };
-  function doDownload(){
-    try{
-      var blob = new Blob([JSON.stringify(proj)], {type: 'application/octet-stream'});
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      var d = new Date();
-      a.download = 'neuset-' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '.neuset';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
-      toast('Проект сохранён в файл .neuset');
-    }catch(e){
-      toast('Не удалось сохранить файл');
-    }
-  }
-  if(model && typeof tf !== 'undefined'){
-    toast('Упаковываю модель…');
+  if(model){
+    $('#modelStatus').textContent = 'Собираю файл .neuset…';
     model.save(tf.io.withSaveHandler(function(artifacts){
-      proj.model = {
+      payload.model = {
         topology: artifacts.modelTopology,
         weightSpecs: artifacts.weightSpecs,
-        weights: abToB64(artifacts.weightData)
+        weightsB64: b64FromAB(artifacts.weightData)
       };
-      return {modelArtifactsInfo: {dateSaved: new Date(), modelTopologyType: 'JSON'}};
-    })).then(doDownload).catch(function(){
-      console.warn('model pack', e);
-      toast('Модель не удалось упаковать — сохраняю проект без неё');
-      doDownload();
+      return Promise.resolve({modelArtifactsInfo: {dateSaved: new Date(), modelTopologyType: 'JSON'}});
+    })).then(function(){ finishSaveNeuset(payload); }).catch(function(err){
+      console.warn('neuset save', err);
+      finishSaveNeuset(payload);
+      toast('Модель упаковать не удалось &#8212; сохранён проект без неё');
     });
   } else {
-    doDownload();
+    finishSaveNeuset(payload);
   }
 });
+function finishSaveNeuset(payload){
+  try{
+    var text = JSON.stringify(payload);
+    var name = neusetFileName();
+    downloadBlob(new Blob([text], {type: 'application/octet-stream'}), name);
+    $('#modelStatus').textContent = payload.model ? 'Проект сохранён (с моделью)' : 'Проект сохранён (без модели)';
+    toast('Сохранено: ' + name);
+  } catch(e){
+    console.warn(e);
+    toast('Ошибка сохранения: ' + e.message);
+  }
+}
+
+/* Открыть .neuset */
 var neusetInput = $('#neusetInput');
-$('#btnImportNeuset').addEventListener('click', function(){ neusetInput.click(); });
+$('#btnOpenSet').addEventListener('click', function(){ neusetInput.click(); });
 neusetInput.addEventListener('change', function(){
-  var f = (neusetInput.files || [])[0];
+  var f = neusetInput.files && neusetInput.files[0];
   neusetInput.value = '';
   if(!f) return;
-  readAsText(f).then(function(text){
-    loadNeuset(text);
-  }).catch(function(){ toast('Не удалось прочитать файл'); });
-});
-function loadNeuset(text){
-  var proj;
-  try{ proj = JSON.parse(text); }catch(e){ toast('Файл повреждён — это не Neuset-проект'); return; }
-  if(!proj || proj.app !== 'Neuset' || !Array.isArray(proj.images)){ toast('Это не файл Neuset'); return; }
-  if(!confirm('Заменить текущий проект (датасет, классы и модель)?')) return;
-  classes = (proj.classes || []).filter(function(c){ return c && c.name; }).slice(0, 8);
-  images = proj.images.filter(function(im){ return im && im.dataUrl; }).map(function(im, i){
-    return {id: im.id || uid(), name: im.name || 'фото ' + (i + 1), dataUrl: im.dataUrl, boxes: im.boxes || []};
-  });
-  lossHistory = Array.isArray(proj.loss) ? proj.loss : [];
-  model = null;
-  $('#modelStatus').textContent = '';
-  drawLossChart();
-  if(proj.model && typeof tf !== 'undefined'){
-    try{
-      tf.loadLayersModel(tf.io.fromMemory({
-        modelTopology: proj.model.topology,
-        weightSpecs: proj.model.weightSpecs,
-        weightData: b64ToAb(proj.model.weights)
-      })).then(function(m){
+  var r = new FileReader();
+  r.onload = function(){
+    var p;
+    try{ p = JSON.parse(r.result); } catch(e){ toast('Файл повреждён или это не .neuset'); return; }
+    if(!p || p.format !== 'NeuSet'){ toast('Это не файл NeuSet (.neuset)'); return; }
+    classes = Array.isArray(p.classes) ? p.classes : [];
+    images = Array.isArray(p.images) ? p.images : [];
+    migrateShapes();
+    model = null;
+    lossHistory = [];
+    drawLossChart();
+    renderClasses(); renderClassSelects(); renderGallery();
+    saveState();
+    if(p.model && p.model.topology){
+      $('#modelStatus').textContent = 'Загружаю модель из файла…';
+      modelFromArtifacts(p.model).then(function(m){
         model = m;
-        var outCh = model.outputs[0].shape[3];
-        $('#modelStatus').textContent = (outCh === classes.length)
-          ? 'Модель из проекта загружена (' + outCh + ' кл.)'
-          : 'Модель из проекта на ' + outCh + ' кл., а классов ' + classes.length + ' — переобучите';
-      }).catch(function(err){ console.warn('load model', err); });
-    }catch(e){ console.warn('load model', e); }
-  }
-  saveState();
-  renderClasses(); renderClassSelects(); renderGallery();
-  toast('Проект загружен: ' + images.length + ' фото, ' + classes.length + ' классов');
-}
+        persistModel();
+        if(checkModelAgainstClasses(m)){
+          $('#modelStatus').textContent = 'Модель из .neuset готова (' + classes.length + ' кл.)';
+        } else {
+          $('#modelStatus').textContent = 'Модель из .neuset на ' + m.outputs[0].shape[3] + ' кл., а классов ' + classes.length + ' — переобучите';
+        }
+        toast('Проект открыт: ' + images.length + ' фото, ' + classes.length + ' классов');
+      }).catch(function(err){
+        console.warn(err);
+        $('#modelStatus').textContent = 'Модель из файла не загрузилась';
+        toast('Проект открыт, но модель не загрузилась');
+      });
+    } else {
+      $('#modelStatus').textContent = 'В этом .neuset нет обученной модели — обучите заново';
+      toast('Проект открыт: ' + images.length + ' фото, ' + classes.length + ' классов');
+    }
+  };
+  r.onerror = function(){ toast('Не удалось прочитать файл'); };
+  r.readAsText(f);
+});
 
 /* ---------- редактор разметки ---------- */
 var edCanvas = $('#edCanvas');
@@ -612,11 +668,11 @@ function openEditor(id){
   var rec = null;
   for(var k = 0; k < images.length; k++) if(images[k].id === id){ rec = images[k]; break; }
   if(!rec) return;
-  editRec = {rec: rec, boxes: rec.boxes.map(cloneShape)};
+  editRec = {rec: rec, idx: images.indexOf(rec), boxes: rec.boxes.map(cloneShape)};
   editSelected = -1;
   editDrag = null;
   $('#btnEdDeleteBox').disabled = true;
-  $('#edTitle').textContent = rec.name || 'Разметка';
+  updateEdTitle();
   renderClassSelects();
   $('#edClass').disabled = !classes.length;
   $('#editorOverlay').classList.remove('hidden');
@@ -630,9 +686,45 @@ function openEditor(id){
     if(!classes.length) toast('Сначала добавьте хотя бы один класс во вкладке «Классы»');
   }).catch(function(){ toast('Не удалось открыть фото'); });
 }
+function updateEdTitle(){
+  if(!editRec) return;
+  var annotatedNow = images.reduce(function(n, im){
+    if(im.id === editRec.rec.id) return n + (editRec.boxes.length ? 1 : 0);
+    return n + (im.boxes.length ? 1 : 0);
+  }, 0);
+  $('#edTitle').textContent = (editRec.rec.name || 'Разметка') +
+    ' · фото ' + (editRec.idx + 1) + ' из ' + images.length +
+    ' · размечено ' + annotatedNow + '/' + images.length;
+}
 function closeEditor(){
   $('#editorOverlay').classList.add('hidden');
   editRec = null; editImg = null; editDrag = null; editSelected = -1;
+}
+/* Сохранить текущую разметку и сразу открыть следующее неразмеченное фото */
+function saveAndNext(){
+  if(!editRec) return;
+  editRec.rec.boxes = editRec.boxes;
+  saveState(); renderGallery();
+  var curIdx = editRec.idx;
+  editRec = null; editImg = null; editDrag = null; editSelected = -1;
+  var n = -1;
+  for(var k = 1; k <= images.length; k++){
+    var j = (curIdx + k) % images.length;
+    if(images[j].boxes.length === 0){ n = j; break; }
+  }
+  if(n >= 0){
+    openEditor(images[n].id);
+    toast('Сохранено · открыто фото ' + (n + 1) + ' из ' + images.length);
+    return;
+  }
+  var allDone = images.length && images.every(function(im){ return im.boxes.length > 0; });
+  if(allDone && images.length > 1){
+    closeEditor();
+    toast('Готово — все ' + images.length + ' фото размечены ✓');
+  } else {
+    closeEditor();
+    toast('Разметка сохранена');
+  }
 }
 function polyPath(ctx, pts, W, H){
   ctx.beginPath();
@@ -695,9 +787,13 @@ function drawEditor(){
       edCtx.globalAlpha = 1;
       edCtx.strokeRect(Math.min(a.x, c.x) * W, Math.min(a.y, c.y) * H, Math.abs(c.x - a.x) * W, Math.abs(c.y - a.y) * H);
     } else if(editDrag.mode === 'lasso' && editDrag.pts.length){
-      polyPath(edCtx, editDrag.pts, W, H);
-      edCtx.fill();
+      /* во время рисования — открытая линия, точно следующая за курсором */
       edCtx.globalAlpha = 1;
+      edCtx.beginPath();
+      for(var i = 0; i < editDrag.pts.length; i++){
+        if(i) edCtx.lineTo(editDrag.pts[i][0] * W, editDrag.pts[i][1] * H);
+        else edCtx.moveTo(editDrag.pts[i][0] * W, editDrag.pts[i][1] * H);
+      }
       edCtx.stroke();
     }
     edCtx.restore();
@@ -757,7 +853,7 @@ edCanvas.addEventListener('pointerdown', function(e){
   }
   editSelected = -1;
   $('#btnEdDeleteBox').disabled = true;
-  editDrag = (edMode === 'rect') ? {mode: 'new', start: p, cur: p} : {mode: 'lasso', pts: [p]};
+  editDrag = (edMode === 'rect') ? {mode: 'new', start: p, cur: p} : {mode: 'lasso', pts: [[p.x, p.y]]};
   drawEditor();
 });
 edCanvas.addEventListener('pointermove', function(e){
@@ -770,9 +866,16 @@ edCanvas.addEventListener('pointermove', function(e){
     return;
   }
   if(editDrag.mode === 'lasso'){
+    /* интерполяция: линия следует за курсором непрерывно, без скачков */
     var last = editDrag.pts[editDrag.pts.length - 1];
-    if(!last || Math.hypot(p.x - last[0], p.y - last[1]) > 0.008){
-      editDrag.pts.push([p.x, p.y]);
+    var dx = p.x - last[0], dy = p.y - last[1];
+    var dist = Math.hypot(dx, dy);
+    var step = 0.005;
+    if(dist > step){
+      var nSteps = Math.min(60, Math.ceil(dist / step));
+      for(var i = 1; i <= nSteps; i++){
+        editDrag.pts.push([last[0] + dx * i / nSteps, last[1] + dy * i / nSteps]);
+      }
       drawEditor();
     }
     return;
@@ -780,13 +883,13 @@ edCanvas.addEventListener('pointermove', function(e){
   var b = editRec.boxes[editSelected];
   if(!b) return;
   if(editDrag.mode === 'move'){
-    var dx = p.x - editDrag.start.x, dy = p.y - editDrag.start.y;
+    var ddx = p.x - editDrag.start.x, ddy = p.y - editDrag.start.y;
     if(b.kind === 'rect'){
-      b.x = clamp(editDrag.orig.x + dx, 0, 1 - editDrag.orig.w);
-      b.y = clamp(editDrag.orig.y + dy, 0, 1 - editDrag.orig.h);
+      b.x = clamp(editDrag.orig.x + ddx, 0, 1 - editDrag.orig.w);
+      b.y = clamp(editDrag.orig.y + ddy, 0, 1 - editDrag.orig.h);
     } else {
       b.pts = editDrag.orig.pts.map(function(pt){
-        return [clamp(pt[0] + dx, 0, 1), clamp(pt[1] + dy, 0, 1)];
+        return [clamp(pt[0] + ddx, 0, 1), clamp(pt[1] + ddy, 0, 1)];
       });
     }
   } else if(editDrag.mode === 'vertex'){
@@ -830,7 +933,7 @@ function endDrag(){
       }
     }
   } else if(editDrag.mode === 'lasso'){
-    var pts = editDrag.pts;
+    var pts = simplifyPoly(editDrag.pts, 0.004);
     if(pts.length >= 3){
       var bb = shapeBBox({kind: 'poly', pts: pts});
       if(bb.w > 0.02 && bb.h > 0.02){
@@ -849,6 +952,7 @@ function endDrag(){
   }
   editDrag = null;
   drawEditor();
+  updateEdTitle();
 }
 edCanvas.addEventListener('pointerup', endDrag);
 edCanvas.addEventListener('pointercancel', function(){ editDrag = null; if(editRec) drawEditor(); });
@@ -865,24 +969,33 @@ $('#btnEdDeleteBox').addEventListener('click', function(){
   editSelected = -1;
   $('#btnEdDeleteBox').disabled = true;
   drawEditor();
+  updateEdTitle();
 });
-$('#btnEdSave').addEventListener('click', function(){
-  if(!editRec) return;
-  editRec.rec.boxes = editRec.boxes;
-  saveState(); renderGallery(); closeEditor();
-  toast('Разметка сохранена');
-});
+$('#btnEdSave').addEventListener('click', saveAndNext);
 $('#btnEdDelImg').addEventListener('click', function(){
   if(!editRec) return;
   images = images.filter(function(im){ return im.id !== editRec.rec.id; });
-  saveState(); renderGallery(); closeEditor();
+  saveState(); renderGallery();
+  var deleted = editRec.idx;
+  editRec = null; editImg = null; editDrag = null; editSelected = -1;
+  if(images.length){
+    var n = -1;
+    for(var k = 0; k < images.length; k++){
+      var j = (deleted + k) % images.length;
+      if(images[j].boxes.length === 0){ n = j; break; }
+    }
+    if(n >= 0) openEditor(images[n].id);
+    else closeEditor();
+  } else {
+    closeEditor();
+  }
 });
 $('#btnEdClose').addEventListener('click', closeEditor);
 $('#editorOverlay').addEventListener('click', function(e){
   if(e.target === $('#editorOverlay')) closeEditor();
 });
 
-/* ---------- модель: маска покрытия по ячейкам ---------- */
+/* ---------- модель ---------- */
 function buildModel(numClasses){
   var m = tf.sequential();
   m.add(tf.layers.conv2d({inputShape: [INPUT, INPUT, 3], filters: 16, kernelSize: 3, strides: 2, padding: 'same', activation: 'relu'}));
@@ -896,7 +1009,7 @@ function buildModel(numClasses){
 function detectorLoss(pred, tMask){
   return tf.tidy(function(){
     var eps = 1e-7;
-    var p = pred.sigmoid(); /* [B, GRID, GRID, C] */
+    var p = pred.sigmoid();
     var bce = tMask.mul(p.add(eps).log().neg())
       .add(tf.scalar(1).sub(tMask).mul(p.neg().add(1).add(eps).log().neg()));
     var w = tMask.mul(10).add(tf.scalar(1).sub(tMask));
@@ -1043,43 +1156,16 @@ function startTraining(){
       training = false;
       setTrainingUI(false);
       $('#trainProgress').textContent += stopped ? ' · остановлено' : ' · обучение завершено ✓';
-      if(model) $('#modelStatus').textContent = 'Модель обучена и активна (' + classes.length + ' кл.)';
+      if(model){
+        $('#modelStatus').textContent = 'Модель обучена и активна (' + classes.length + ' кл.)';
+        persistModel();
+      }
     }
     runEpoch();
   });
 }
 $('#btnTrain').addEventListener('click', startTraining);
 $('#btnStopTrain').addEventListener('click', function(){ training = false; });
-$('#btnSaveModel').addEventListener('click', function(){
-  if(!model){ toast('Сначала обучите модель'); return; }
-  model.save('downloads://neuset-model').then(function(){
-    toast('Модель скачана: neuset-model.json и .bin');
-  }).catch(function(){ toast('Не удалось сохранить модель'); });
-});
-var modelInput = $('#modelInput');
-$('#btnLoadModel').addEventListener('click', function(){ modelInput.click(); });
-modelInput.addEventListener('change', function(){
-  var files = Array.prototype.slice.call(modelInput.files || []);
-  modelInput.value = '';
-  var json = null, bin = null;
-  files.forEach(function(f){
-    if(f.name.indexOf('.json') === f.name.length - 5) json = f;
-    else if(f.name.indexOf('.bin') === f.name.length - 4 || f.name.indexOf('.pb') === f.name.length - 3) bin = f;
-  });
-  if(!json){ toast('Выберите файл модели .json (и рядом .bin)'); return; }
-  var list = bin ? [json, bin] : [json];
-  tf.loadLayersModel(tf.io.browserFiles(list)).then(function(m){
-    model = m;
-    var outCh = model.outputs[0].shape[3];
-    $('#modelStatus').textContent = outCh === classes.length
-      ? 'Модель загружена (' + outCh + ' классов)'
-      : 'Загружена модель на ' + outCh + ' кл., а сейчас классов ' + classes.length + ' — переобучите';
-    toast('Модель загружена');
-  }).catch(function(err){
-    console.warn(err);
-    toast('Ошибка загрузки модели');
-  });
-});
 
 /* ---------- камера ---------- */
 var video = $('#video'), overlay = $('#overlay');
@@ -1155,6 +1241,7 @@ function runDetection(){
   });
   drawOverlay(comps);
 }
+/* Декодирование маски: ячейки с уверенностью выше порога собираем в связные области */
 function decodeMasks(data, thrVal){
   var C = model.outputs[0].shape[3];
   var G = GRID;
@@ -1253,6 +1340,20 @@ function drawOverlay(comps){
   .then(function(){
     migrateShapes();
     renderClasses(); renderClassSelects(); renderGallery();
+    return idbGet('model').then(function(a){
+      if(!a || !a.topology || typeof tf === 'undefined') return null;
+      return modelFromArtifacts(a);
+    }).catch(function(){ return null; });
+  })
+  .then(function(m){
+    if(m){
+      model = m;
+      if(checkModelAgainstClasses(m)){
+        $('#modelStatus').textContent = 'Модель загружена из браузера (' + classes.length + ' кл.)';
+      } else {
+        $('#modelStatus').textContent = 'Модель в браузере на ' + m.outputs[0].shape[3] + ' кл., а классов ' + classes.length + ' — переобучите';
+      }
+    }
   });
 })();
 
